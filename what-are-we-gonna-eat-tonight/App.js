@@ -1,0 +1,8605 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { StatusBar, StyleSheet, Text, View, ScrollView, TouchableOpacity, TextInput, Modal, Button, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
+import { db, registerWithEmail, loginWithEmail, setAuthToken, clearAuthToken, deleteCurrentAccount, reauthenticateCurrentUser} from './firebase';
+import * as Clipboard from 'expo-clipboard';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+function AppContent() {
+
+  const insets = useSafeAreaInsets();
+//login
+const SAVED_LOGIN_KEY = 'what_are_we_gonna_eat_saved_login_v1';
+
+
+// 流程導航: 'login' -> 'register' -> 'group_setup' -> 'main'
+const [appStage, setAppStage] = useState('login');
+
+// 用途：App 開啟時，先檢查手機是否已有登入紀錄
+const [isCheckingSavedLogin, setIsCheckingSavedLogin] = useState(true);
+
+  // 主App分頁: 'home', 'group', 'add', 'profile'
+  const [currentTab, setCurrentTab] = useState('home');
+  const CURRENT_DATE = new Date();
+
+ // 用戶與註冊狀態
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [inputInviteCode, setInputInviteCode] = useState('');
+  const [userRole, setUserRole] = useState('eat');
+  const [familyGroupName, setFamilyGroupName] = useState('');
+  const [groupInviteCode, setGroupInviteCode] = useState('');
+  const [groupRole, setGroupRole] = useState('member');
+
+// 用途：記錄目前群組真正有管理權限的 email
+const [groupAdminEmails, setGroupAdminEmails] = useState([]);
+
+// 用途：判斷目前登入者是否有管理權限
+// 之後一律以 familyGroups.adminEmails 為準
+const isCurrentUserAdmin = groupAdminEmails.includes(email);
+
+// 用途：家庭菜餚庫是否進入編輯模式
+const [isDishEditMode, setIsDishEditMode] = useState(false);
+
+// 用途：家庭菜餚庫編輯模式下，用來搜尋要隱藏的菜式
+const [dishEditSearchQuery, setDishEditSearchQuery] = useState('');
+// 用途：家庭菜餚庫編輯模式下，記錄已勾選要隱藏的菜式 id
+const [selectedDishIdsForHide, setSelectedDishIdsForHide] = useState([]); 
+  // 編輯模式狀態
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editNickname, setEditNickname] = useState(nickname);
+  const [editRole, setEditRole] = useState(userRole);
+  const [editGroupName, setEditGroupName] = useState(familyGroupName);
+// 用途：把登入資料存在手機，之後開 App 可以自動登入
+const saveLoginSessionToDevice = async (user, loginEmail) => {
+  try {
+    await AsyncStorage.setItem(
+      SAVED_LOGIN_KEY,
+      JSON.stringify({
+        email: loginEmail,
+        idToken: user.idToken,
+        localId: user.localId,
+        refreshToken: user.refreshToken || '',
+        savedAt: Date.now()
+      })
+    );
+  } catch (error) {
+    console.log('saveLoginSessionToDevice error:', error);
+  }
+};
+
+// 用途：登出時清除手機內的登入資料
+const clearLoginSessionFromDevice = async () => {
+  try {
+    await AsyncStorage.removeItem(SAVED_LOGIN_KEY);
+  } catch (error) {
+    console.log('clearLoginSessionFromDevice error:', error);
+  }
+};
+
+// 用途：登入成功 / 自動登入成功後，讀取 Firestore 的 user profile，然後決定進 main 還是 group_setup
+const loadUserProfileAfterAuth = async (loginEmail) => {
+  const users = await db.collection('users').getAll();
+  const me = users.find(u => u.email === loginEmail);
+
+  setEmail(loginEmail);
+
+  if (me) {
+    setNickname(me.nickname || '');
+    setUserRole(me.userRole || 'eat');
+    setFamilyGroupName(me.familyGroupName || '');
+    setGroupInviteCode(me.groupInviteCode || '');
+
+    let finalGroupRole = 'member';
+    let finalAdminEmails = [];
+
+    if (me.groupInviteCode) {
+      const groups = await db.collection('familyGroups').getAll();
+      const currentGroup = groups.find(g => g.inviteCode === me.groupInviteCode);
+
+      if (currentGroup) {
+        finalAdminEmails = Array.isArray(currentGroup.adminEmails)
+          ? currentGroup.adminEmails
+          : [];
+
+        finalGroupRole = finalAdminEmails.includes(loginEmail) ? 'admin' : 'member';
+      }
+    }
+
+    setGroupRole(finalGroupRole);
+    setGroupAdminEmails(finalAdminEmails);
+
+    if (me.groupInviteCode) {
+      setAppStage('main');
+    } else {
+      setAppStage('group_setup');
+    }
+  } else {
+    setGroupRole('member');
+    setGroupAdminEmails([]);
+    setAppStage('group_setup');
+  }
+};
+
+// 用途：App 每次打開時，先檢查手機是否已有登入紀錄；有就自動進入 App
+useEffect(() => {
+  const restoreLoginSessionFromDevice = async () => {
+    try {
+      const savedLoginText = await AsyncStorage.getItem(SAVED_LOGIN_KEY);
+
+      if (!savedLoginText) {
+        setAppStage('login');
+        return;
+      }
+
+      const savedLogin = JSON.parse(savedLoginText);
+
+      if (!savedLogin?.email || !savedLogin?.idToken) {
+        await clearLoginSessionFromDevice();
+        clearAuthToken();
+        setAppStage('login');
+        return;
+      }
+
+      setAuthToken(savedLogin.idToken);
+
+      await loadUserProfileAfterAuth(savedLogin.email);
+    } catch (error) {
+      console.log('restoreLoginSessionFromDevice error:', error);
+
+      await clearLoginSessionFromDevice();
+      clearAuthToken();
+      setAppStage('login');
+    } finally {
+      setIsCheckingSavedLogin(false);
+    }
+  };
+
+  restoreLoginSessionFromDevice();
+}, []);
+
+
+
+ // 登入與註冊邏輯
+// 用途：登入 Firebase Auth，然後讀取 Firestore 入面自己的 user profile
+// 用途：登入 Firebase Auth，然後讀取 Firestore 入面自己的 user profile
+const handleLogin = async () => {
+  try {
+    if (!email || !password) {
+      return showMessage('請輸入電郵和密碼。');
+    }
+
+    const user = await loginWithEmail(email, password);
+
+    // 存 token 給 Firestore 用
+    setAuthToken(user.idToken);
+
+    // 存登入紀錄到手機，之後開 App 可以自動登入
+    await saveLoginSessionToDevice(user, email);
+
+    // 登入後，從 Firebase users collection 找回自己資料
+    await loadUserProfileAfterAuth(email);
+
+    console.log("成功登入:", user);
+  } catch (err) {
+    showMessage('登入失敗', err.message || String(err));
+  }
+};
+
+
+// 註冊呼叫範例
+// 用途：註冊 Firebase Auth 帳號，並建立 users profile
+const handleRegister = async () => {
+  try {
+    if (!nickname || !email || !password || !confirmPassword) {
+      return showMessage('所有欄位皆為必填。');
+    }
+
+    if (password !== confirmPassword) {
+      return showMessage('兩次輸入的密碼不一致。');
+    }
+
+ const user = await registerWithEmail(email, password);
+
+// 存 token 給 Firestore 用
+setAuthToken(user.idToken);
+
+// 存登入紀錄到手機，之後開 App 可以自動登入
+await saveLoginSessionToDevice(user, email);
+
+    await db.collection('users').add({
+      uid: user.localId,
+      email: email,
+      nickname: nickname,
+      userRole: userRole || 'eat',
+      familyGroupName: '',
+      groupInviteCode: '',
+      groupRole: 'member',
+      accountStatus: 'active',
+      createdAt: new Date()
+    });
+
+    // 剛註冊時未加入任何群組，所以沒有 admin 權限
+    setGroupRole('member');
+    setGroupAdminEmails([]);
+
+    setAppStage('group_setup');
+  } catch (err) {
+    showMessage('註冊失敗', err.message || String(err));
+  }
+};
+
+  // 核心成員名單狀態
+const [members, setMembers] = useState([
+  { id: 'me', name: '吃貨小明 (我自己)', isMe: true, isPrimaryCook: false }
+]);
+
+// 用途：控制「修改家庭群組名稱」獨立編輯模式
+const [isEditingGroupName, setIsEditingGroupName] = useState(false);
+
+// 用途：控制「家庭群組成員管理」是否進入管理模式
+const [isManagingMembers, setIsManagingMembers] = useState(false);
+
+// 用途：真正從 Firebase 讀取的家庭群組成員
+const [groupMembers, setGroupMembers] = useState([]);
+
+
+  // 用於點菜視窗等其他地方的動態組合名單
+  const familyMembers = useMemo(() => {
+    return members.map(m => m.isMe ? { ...m, name: `${nickname} (我自己)`, isPrimaryCook: userRole === 'cook' } : m);
+  }, [members, nickname, userRole]);
+
+// 群組碼產生器
+const generateInviteCode = () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+};
+
+
+const generateUniqueInviteCode = async () => {
+  const groups = await db.collection('familyGroups').getAll();
+const safeGroups = Array.isArray(groups) ? groups : [];
+
+  let newCode = '';
+  let exists = true;
+
+  while (exists) {
+    newCode = generateInviteCode();
+    exists = safeGroups.some(group => group.inviteCode === newCode);
+  }
+
+  return newCode;
+};
+// 用途：長按複製家庭群組代碼
+const handleCopyGroupInviteCode = async () => {
+  try {
+    if (!groupInviteCode) {
+      return showMessage('目前沒有群組代碼。');
+    }
+
+    await Clipboard.setStringAsync(groupInviteCode);
+
+    showMessage('已複製群組代碼。');
+  } catch (error) {
+    console.log('handleCopyGroupInviteCode error:', error);
+    showMessage('複製失敗', error.message || String(error));
+  }
+};
+//「創建群組」function
+// 用途：建立家庭群組，並同步更新自己 users profile
+const handleCreateFamilyGroup = async () => {
+  try {
+    const groupName = familyGroupName.trim() || `${nickname}的家庭群組`;
+
+    const newCode = await generateUniqueInviteCode();
+
+    const groupData = {
+  groupName: groupName,
+  inviteCode: newCode,
+  createdByEmail: email,
+  createdByNickname: nickname,
+
+  // 群組權限資料
+  ownerEmail: email,
+  adminEmails: [email],
+
+  // 群組成員資料
+  memberNames: [nickname],
+  memberEmails: [email],
+
+  // 用途：群組共用分類 / 標籤設定
+  tagCategories: INITIAL_TAG_CATEGORIES,
+
+  createdAt: new Date()
+};
+
+    // 1. 新增群組到 Firebase
+    await db.collection('familyGroups').add(groupData);
+
+    // 2. 更新自己 users profile
+    const users = await db.collection('users').getAll();
+    const me = users.find(u => u.email === email);
+
+    if (me) {
+      await db.collection('users').update(me.id, {
+        uid: me.uid || '',
+        email: email,
+        nickname: nickname,
+        userRole: userRole || 'eat',
+        familyGroupName: groupName,
+        groupInviteCode: newCode,
+        groupRole: 'admin',
+        accountStatus: me.accountStatus || 'active',
+        createdAt: me.createdAt || new Date()
+      });
+    }
+
+    // 3. 更新本機畫面 state
+setFamilyGroupName(groupName);
+setGroupInviteCode(newCode);
+setGroupRole('admin');
+setGroupAdminEmails([email]);
+
+    setAppStage('main');
+  } catch (error) {
+    console.log('handleCreateFamilyGroup error:', error);
+    showMessage('建立群組失敗', error.message || String(error));
+  }
+};
+
+// 用途：從 Firebase 讀取目前群組的所有成員，並顯示每個人的暱稱和 userRole
+const loadGroupMembersFromFirebase = async () => {
+  try {
+    if (!groupInviteCode) {
+      setGroupMembers([]);
+      return;
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    if (!currentGroup) {
+      setGroupMembers([]);
+      return;
+    }
+
+    const users = await db.collection('users').getAll();
+
+const memberEmails = Array.isArray(currentGroup.memberEmails)
+  ? currentGroup.memberEmails
+  : [];
+
+const memberNames = Array.isArray(currentGroup.memberNames)
+  ? currentGroup.memberNames
+  : [];
+
+const currentAdminEmails = Array.isArray(currentGroup.adminEmails)
+  ? currentGroup.adminEmails
+  : [];
+
+let loadedMembers = [];
+
+    // 優先用 memberEmails，因為 email 可以對應 users 裡面的 userRole
+    if (memberEmails.length > 0) {
+      loadedMembers = memberEmails.map((memberEmail, index) => {
+        const userData = users.find(u => u.email === memberEmail);
+
+return {
+  id: userData?.id || memberEmail || String(index),
+  email: memberEmail,
+  name: userData?.nickname || (memberEmail === email ? nickname : memberEmail),
+  userRole: userData?.userRole || (memberEmail === email ? userRole : 'eat'),
+
+  // 用途：現在只用 adminEmails 判斷此成員是否 admin
+  groupRole: currentAdminEmails.includes(memberEmail) ? 'admin' : 'member',
+  isAdmin: currentAdminEmails.includes(memberEmail),
+
+  isMe: memberEmail === email
+};
+      });
+    } else {
+      // 舊資料 fallback：如果舊群組只有 memberNames，仍然先顯示名字
+      loadedMembers = memberNames.map((name, index) => {
+  return {
+    id: `name-${index}`,
+    email: '',
+    name: name,
+    userRole: name === nickname ? userRole : 'eat',
+    groupRole: 'member',
+    isAdmin: false,
+    isMe: name === nickname
+  };
+});
+
+    }
+
+ // 分頁5：讓「我自己」永遠排在最上面
+const sortedMembers = [...loadedMembers].sort((a, b) => {
+  if (a.isMe && !b.isMe) return -1;
+  if (!a.isMe && b.isMe) return 1;
+  return 0;
+});
+
+setGroupMembers(sortedMembers);
+setGroupAdminEmails(currentAdminEmails);
+
+  } catch (error) {
+    console.log('loadGroupMembersFromFirebase error:', error);
+    showMessage('載入成員失敗', error.message || String(error));
+  }
+};
+
+
+// 用途：登入、加入群組、切換群組、改暱稱或角色後，自動重新載入 Firebase 成員名單
+useEffect(() => {
+  loadGroupMembersFromFirebase();
+}, [groupInviteCode, email, nickname, userRole]);
+
+// 用途：admin 可以指定或取消其他人成為 admin
+// 注意：ownerEmail 只作紀錄，不再自動等於 admin
+const handleToggleAdmin = async (member) => {
+  try {
+    if (!isCurrentUserAdmin) {
+      return 
+    }
+
+    if (member.isMe) {
+      return showMessage('不能更改自己的管理員身份。');
+    }
+
+    if (!member.email) {
+      return showMessage('錯誤，無設定此帳為管理員。');
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    if (!currentGroup) {
+      return showMessage('錯誤', '找不到目前群組資料。');
+    }
+
+    let adminEmails = Array.isArray(currentGroup.adminEmails)
+      ? [...currentGroup.adminEmails]
+      : [];
+
+    const isAlreadyAdmin = adminEmails.includes(member.email);
+
+    if (isAlreadyAdmin) {
+      // 不可以取消最後一位 admin，避免整個群組無人可以管理
+      if (adminEmails.length <= 1) {
+        return showMessage('群組至少需要一位管理員。');
+      }
+
+      adminEmails = adminEmails.filter(e => e !== member.email);
+    } else {
+      adminEmails = [...adminEmails, member.email];
+    }
+
+    await db.collection('familyGroups').update(currentGroup.id, {
+      groupName: currentGroup.groupName || '',
+      inviteCode: currentGroup.inviteCode || '',
+      createdByEmail: currentGroup.createdByEmail || '',
+      createdByNickname: currentGroup.createdByNickname || '',
+
+      // ownerEmail 只作建立者紀錄，不再影響權限
+      ownerEmail: currentGroup.ownerEmail || '',
+
+      // 真正權限來源
+      adminEmails: adminEmails,
+
+      memberNames: currentGroup.memberNames || [],
+      memberEmails: currentGroup.memberEmails || [],
+      createdAt: currentGroup.createdAt || new Date()
+    });
+
+    const users = await db.collection('users').getAll();
+    const targetUser = users.find(u => u.email === member.email);
+
+    if (targetUser) {
+      await db.collection('users').update(targetUser.id, {
+        uid: targetUser.uid || '',
+        email: targetUser.email || '',
+        nickname: targetUser.nickname || '',
+        userRole: targetUser.userRole || 'eat',
+        familyGroupName: currentGroup.groupName || '',
+        groupInviteCode: currentGroup.inviteCode || '',
+
+        // groupRole 只分 admin / member，不再用 owner 做權限
+        groupRole: isAlreadyAdmin ? 'member' : 'admin',
+
+        accountStatus: targetUser.accountStatus || 'active',
+        createdAt: targetUser.createdAt || new Date()
+      });
+    }
+
+    // 如果改的是目前本機群組，立即同步 adminEmails state
+    setGroupAdminEmails(adminEmails);
+
+    await loadGroupMembersFromFirebase();
+
+
+  } catch (error) {
+    console.log('handleToggleAdmin error:', error);
+    showMessage('更新管理員失敗', error.message || String(error));
+  }
+};
+
+
+// 用途：admin 可以將 member 移出目前家庭群組
+// 注意：ownerEmail 只作紀錄，所以即使該成員是原建立者，也可以被 admin 移出群組
+const handleRemoveGroupMemberByAdmin = async (member) => {
+  try {
+    if (!isCurrentUserAdmin) {
+      return showMessage('只有管理員可以移除群組成員。');
+    }
+
+    if (member.isMe) {
+      return showMessage('不能移除自己');
+    }
+
+    if (!member.email) {
+      return showMessage('無法移除此成員。');
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    if (!currentGroup) {
+      return showMessage('錯誤沒有此群組。');
+    }
+
+    const oldMemberEmails = Array.isArray(currentGroup.memberEmails)
+      ? currentGroup.memberEmails
+      : [];
+
+    const oldMemberNames = Array.isArray(currentGroup.memberNames)
+      ? currentGroup.memberNames
+      : [];
+
+    const removeIndex = oldMemberEmails.findIndex(e => e === member.email);
+
+    const memberEmails = oldMemberEmails.filter(e => e !== member.email);
+
+    const memberNames =
+      removeIndex >= 0
+        ? oldMemberNames.filter((_, index) => index !== removeIndex)
+        : oldMemberNames.filter(n => n !== member.name);
+
+    let adminEmails = Array.isArray(currentGroup.adminEmails)
+      ? currentGroup.adminEmails.filter(e => e !== member.email)
+      : [];
+
+    // 如果移除後沒有 admin，就按剩餘成員加入順序補第一位做 admin
+    if (adminEmails.length === 0 && memberEmails.length > 0) {
+      adminEmails = [memberEmails[0]];
+    }
+
+    await db.collection('familyGroups').update(currentGroup.id, {
+      groupName: currentGroup.groupName || '',
+      inviteCode: currentGroup.inviteCode || '',
+      createdByEmail: currentGroup.createdByEmail || '',
+      createdByNickname: currentGroup.createdByNickname || '',
+
+      // ownerEmail 只作建立者紀錄，不再影響權限
+      ownerEmail: currentGroup.ownerEmail || '',
+
+      // 真正權限來源
+      adminEmails: adminEmails,
+
+      memberNames: memberNames,
+      memberEmails: memberEmails,
+      createdAt: currentGroup.createdAt || new Date()
+    });
+
+    const users = await db.collection('users').getAll();
+    const targetUser = users.find(u => u.email === member.email);
+
+    // 被移除的人清空群組資料
+    if (targetUser) {
+      await db.collection('users').update(targetUser.id, {
+        uid: targetUser.uid || '',
+        email: targetUser.email || '',
+        nickname: targetUser.nickname || '',
+        userRole: targetUser.userRole || 'eat',
+        familyGroupName: '',
+        groupInviteCode: '',
+        groupRole: 'member',
+        accountStatus: targetUser.accountStatus || 'active',
+        createdAt: targetUser.createdAt || new Date()
+      });
+    }
+
+    // 同步更新仍然是 admin 的 users groupRole
+    for (const adminEmail of adminEmails) {
+      const adminUser = users.find(u => u.email === adminEmail);
+
+      if (adminUser) {
+        await db.collection('users').update(adminUser.id, {
+          uid: adminUser.uid || '',
+          email: adminUser.email || '',
+          nickname: adminUser.nickname || '',
+          userRole: adminUser.userRole || 'eat',
+          familyGroupName: currentGroup.groupName || '',
+          groupInviteCode: currentGroup.inviteCode || '',
+          groupRole: 'admin',
+          accountStatus: adminUser.accountStatus || 'active',
+          createdAt: adminUser.createdAt || new Date()
+        });
+      }
+    }
+
+    // 同步本機 adminEmails state
+    setGroupAdminEmails(adminEmails);
+
+    await loadGroupMembersFromFirebase();
+
+    showMessage(`已將 ${member.name} 移出群組。`);
+  } catch (error) {
+    console.log('handleRemoveGroupMemberByAdmin error:', error);
+    showMessage('移除成員失敗', error.message || String(error));
+  }
+};
+
+// 用途：切換 / 加入群組，並同步 users profile、familyGroups 成員資料
+// 注意：ownerEmail 只作紀錄；真正管理權限只看 adminEmails
+const handleSwitchOrJoinGroup = async () => {
+  try {
+    const newCode = inputInviteCode.trim().toUpperCase();
+
+    if (!newCode) {
+      return showMessage('請輸入群組邀請碼');
+    }
+
+    // 如果本身已經在同一個群組
+    if (groupInviteCode && groupInviteCode === newCode) {
+      return showMessage('你已經在這個群組。');
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const targetGroup = groups.find(group => group.inviteCode === newCode);
+
+    if (!targetGroup) {
+      return showMessage('邀請碼不符。');
+    }
+
+    const users = await db.collection('users').getAll();
+
+    // =========================
+    // 1. 如果現在已有群組，先自動退出舊群組
+    // =========================
+    if (groupInviteCode) {
+      const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+      if (currentGroup) {
+        const oldMemberEmails = Array.isArray(currentGroup.memberEmails)
+          ? currentGroup.memberEmails
+          : [];
+
+        const oldMemberNames = Array.isArray(currentGroup.memberNames)
+          ? currentGroup.memberNames
+          : [];
+
+        const removeIndex = oldMemberEmails.findIndex(e => e === email);
+
+        const memberEmails = oldMemberEmails.filter(e => e !== email);
+
+        const memberNames =
+          removeIndex >= 0
+            ? oldMemberNames.filter((_, index) => index !== removeIndex)
+            : oldMemberNames.filter(n => n !== nickname);
+
+        let adminEmails = Array.isArray(currentGroup.adminEmails)
+          ? currentGroup.adminEmails.filter(e => e !== email)
+          : [];
+
+        // 如果退出後沒有 admin，但仍有成員，就按加入次序補第一位成員做 admin
+        if (adminEmails.length === 0 && memberEmails.length > 0) {
+          adminEmails = [memberEmails[0]];
+        }
+
+// 如果自己離開後，群組已經沒有任何成員，就直接刪除群組
+if (memberEmails.length === 0) {
+  await db.collection('familyGroups').delete(currentGroup.id);
+} else {
+  await db.collection('familyGroups').update(currentGroup.id, {
+    groupName: currentGroup.groupName || '',
+    inviteCode: currentGroup.inviteCode || '',
+    createdByEmail: currentGroup.createdByEmail || '',
+    createdByNickname: currentGroup.createdByNickname || '',
+
+    // ownerEmail 只作建立者紀錄，不再影響權限
+    ownerEmail: currentGroup.ownerEmail || '',
+
+    // 真正權限來源
+    adminEmails: adminEmails,
+
+    memberNames: memberNames,
+    memberEmails: memberEmails,
+    createdAt: currentGroup.createdAt || new Date()
+  });
+}
+
+        // 如果自動補了 admin，同步更新該 user 的 groupRole
+        for (const adminEmail of adminEmails) {
+          const adminUser = users.find(u => u.email === adminEmail);
+
+          if (adminUser) {
+            await db.collection('users').update(adminUser.id, {
+              uid: adminUser.uid || '',
+              email: adminUser.email || '',
+              nickname: adminUser.nickname || '',
+              userRole: adminUser.userRole || 'eat',
+              familyGroupName: currentGroup.groupName || '',
+              groupInviteCode: currentGroup.inviteCode || '',
+              groupRole: 'admin',
+              accountStatus: adminUser.accountStatus || 'active',
+              createdAt: adminUser.createdAt || new Date()
+            });
+          }
+        }
+      }
+    }
+
+    // =========================
+    // 2. 加入新群組
+    // =========================
+    const updatedMemberNames = Array.isArray(targetGroup.memberNames)
+      ? [...targetGroup.memberNames]
+      : [];
+
+    const updatedMemberEmails = Array.isArray(targetGroup.memberEmails)
+      ? [...targetGroup.memberEmails]
+      : [];
+
+    if (!updatedMemberNames.includes(nickname)) {
+      updatedMemberNames.push(nickname);
+    }
+
+    if (!updatedMemberEmails.includes(email)) {
+      updatedMemberEmails.push(email);
+    }
+
+    let targetAdminEmails = Array.isArray(targetGroup.adminEmails)
+      ? [...targetGroup.adminEmails]
+      : [];
+
+    // 防止舊群組沒有 adminEmails，導致全群組無 admin
+    // 如果目標群組完全沒有 admin，就按成員加入次序補第一位做 admin
+    if (targetAdminEmails.length === 0 && updatedMemberEmails.length > 0) {
+      targetAdminEmails = [updatedMemberEmails[0]];
+    }
+
+    await db.collection('familyGroups').update(targetGroup.id, {
+      groupName: targetGroup.groupName || '',
+      inviteCode: targetGroup.inviteCode || '',
+      createdByEmail: targetGroup.createdByEmail || '',
+      createdByNickname: targetGroup.createdByNickname || '',
+
+      // ownerEmail 只作紀錄
+      ownerEmail: targetGroup.ownerEmail || '',
+
+      // 真正權限來源
+      adminEmails: targetAdminEmails,
+
+      memberNames: updatedMemberNames,
+      memberEmails: updatedMemberEmails,
+      createdAt: targetGroup.createdAt || new Date()
+    });
+
+    // =========================
+    // 3. 更新自己 users profile
+    // =========================
+    const me = users.find(u => u.email === email);
+
+    const nextGroupRole = targetAdminEmails.includes(email) ? 'admin' : 'member';
+
+    if (me) {
+      await db.collection('users').update(me.id, {
+        uid: me.uid || '',
+        email: email,
+        nickname: nickname,
+        userRole: userRole || 'eat',
+        familyGroupName: targetGroup.groupName || '',
+        groupInviteCode: targetGroup.inviteCode || '',
+
+        // 只分 admin / member，不再用 owner 做權限
+        groupRole: nextGroupRole,
+
+        accountStatus: me.accountStatus || 'active',
+        createdAt: me.createdAt || new Date()
+      });
+    }
+
+    // 如果剛才自動補了某人做 admin，也同步更新那個人的 users profile
+    for (const adminEmail of targetAdminEmails) {
+      const adminUser = users.find(u => u.email === adminEmail);
+
+      if (adminUser) {
+        await db.collection('users').update(adminUser.id, {
+          uid: adminUser.uid || '',
+          email: adminUser.email || '',
+          nickname: adminUser.nickname || '',
+          userRole: adminUser.userRole || 'eat',
+          familyGroupName: targetGroup.groupName || '',
+          groupInviteCode: targetGroup.inviteCode || '',
+          groupRole: 'admin',
+          accountStatus: adminUser.accountStatus || 'active',
+          createdAt: adminUser.createdAt || new Date()
+        });
+      }
+    }
+
+    // =========================
+    // 4. 更新本機 state
+    // =========================
+    setFamilyGroupName(targetGroup.groupName || '');
+    setGroupInviteCode(targetGroup.inviteCode || '');
+    setGroupRole(nextGroupRole);
+    setGroupAdminEmails(targetAdminEmails);
+    setInputInviteCode('');
+
+    // 加入 / 切換群組成功後，進入主畫面
+    setAppStage('main');
+
+    // 不要在這裡直接 call loadGroupMembersFromFirebase()
+    // 因為 setGroupInviteCode 是非同步，直接 call 可能會讀到舊 groupInviteCode
+    // 下面的 useEffect 會在 groupInviteCode 更新後自動重新載入成員
+
+    showMessage('成功加入群組：${targetGroup.groupName}');
+  } catch (error) {
+    console.log('handleSwitchOrJoinGroup error:', error);
+    showMessage('加入群組失敗', error.message || String(error));
+  }
+};
+
+// 用途：當最後一位成員離開群組前，提醒群組資料會被清空
+const confirmLastMemberLeaveGroup = () => {
+  if (Platform.OS === 'web') {
+    const confirmed = window.confirm(
+      '你是這個群組最後一位成員。\n\n離開後，這個家庭群組會被刪除，群組資料將會被清空。\n\n你確定要離開嗎？'
+    );
+    return Promise.resolve(confirmed);
+  }
+
+  return new Promise((resolve) => {
+    Alert.alert(
+      '確認離開群組',
+      '你是這個群組最後一位成員。\n\n離開後，這個家庭群組會被刪除，群組資料將會被清空。\n\n你確定要離開嗎？',
+      [
+        {
+          text: '取消',
+          style: 'cancel',
+          onPress: () => resolve(false)
+        },
+        {
+          text: '確認離開',
+          style: 'destructive',
+          onPress: () => resolve(true)
+        }
+      ]
+    );
+  });
+};
+
+const handleLeaveCurrentGroup = async () => {
+  try {
+    if (!groupInviteCode) {
+      return showMessage('你目前未加入任何群組。');
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    if (!currentGroup) {
+      setFamilyGroupName('');
+      setGroupInviteCode('');
+      setGroupRole('member');
+      setGroupAdminEmails([]);
+      setInputInviteCode('');
+      setAppStage('group_setup');
+      setDynamicCategories(INITIAL_TAG_CATEGORIES);
+      return showMessage( '沒有此群組。');
+    }
+
+    // =========================
+    // 1. 從目前群組移除自己
+    // =========================
+    const oldMemberEmails = Array.isArray(currentGroup.memberEmails)
+      ? currentGroup.memberEmails
+      : [];
+
+    const oldMemberNames = Array.isArray(currentGroup.memberNames)
+      ? currentGroup.memberNames
+      : [];
+
+    const removeIndex = oldMemberEmails.findIndex(e => e === email);
+
+    const memberEmails = oldMemberEmails.filter(e => e !== email);
+
+    const memberNames =
+      removeIndex >= 0
+        ? oldMemberNames.filter((_, index) => index !== removeIndex)
+        : oldMemberNames.filter(n => n !== nickname);
+
+    let adminEmails = Array.isArray(currentGroup.adminEmails)
+      ? currentGroup.adminEmails.filter(e => e !== email)
+      : [];
+
+    // 如果自己離開後沒有 admin，但仍然有其他成員，就按加入順序補第一位做 admin
+    if (adminEmails.length === 0 && memberEmails.length > 0) {
+      adminEmails = [memberEmails[0]];
+    }
+
+    // =========================
+    // 2. 更新 familyGroups
+    // =========================
+  // 如果自己離開後，群組已經沒有任何成員，就直接刪除群組
+if (memberEmails.length === 0) {
+  await db.collection('familyGroups').delete(currentGroup.id);
+} else {
+  await db.collection('familyGroups').update(currentGroup.id, {
+    groupName: currentGroup.groupName || '',
+    inviteCode: currentGroup.inviteCode || '',
+    createdByEmail: currentGroup.createdByEmail || '',
+    createdByNickname: currentGroup.createdByNickname || '',
+
+    // ownerEmail 只作建立者紀錄，不再影響權限
+    ownerEmail: currentGroup.ownerEmail || '',
+
+    // 真正權限來源
+    adminEmails: adminEmails,
+
+    memberNames: memberNames,
+    memberEmails: memberEmails,
+    createdAt: currentGroup.createdAt || new Date()
+  });
+}
+
+    // =========================
+    // 3. 更新自己 users profile：清空群組資料
+    // =========================
+    const users = await db.collection('users').getAll();
+    const me = users.find(u => u.email === email);
+
+    if (me) {
+      await db.collection('users').update(me.id, {
+        uid: me.uid || '',
+        email: email,
+        nickname: nickname,
+        userRole: userRole || 'eat',
+        familyGroupName: '',
+        groupInviteCode: '',
+        groupRole: 'member',
+        accountStatus: me.accountStatus || 'active',
+        createdAt: me.createdAt || new Date()
+      });
+    }
+
+    // =========================
+    // 4. 如果有自動補 admin，同步更新該 admin 的 users profile
+    // =========================
+    for (const adminEmail of adminEmails) {
+      const adminUser = users.find(u => u.email === adminEmail);
+
+      if (adminUser) {
+        await db.collection('users').update(adminUser.id, {
+          uid: adminUser.uid || '',
+          email: adminUser.email || '',
+          nickname: adminUser.nickname || '',
+          userRole: adminUser.userRole || 'eat',
+          familyGroupName: currentGroup.groupName || '',
+          groupInviteCode: currentGroup.inviteCode || '',
+          groupRole: 'admin',
+          accountStatus: adminUser.accountStatus || 'active',
+          createdAt: adminUser.createdAt || new Date()
+        });
+      }
+    }
+
+    // =========================
+    // 5. 清空本機 state
+    // =========================
+    setFamilyGroupName('');
+    setGroupInviteCode('');
+    setGroupRole('member');
+    setGroupAdminEmails([]);
+    setInputInviteCode('');
+    setGroupMembers([]);
+    setAppStage('group_setup');
+    setCurrentTab('home');
+
+    showMessage('你已離開目前群組。');
+  } catch (error) {
+    console.log('handleLeaveCurrentGroup error:', error);
+    showMessage('離開群組失敗', error.message || String(error));
+  }
+};
+
+// 用途：登出帳號，只清除本機登入狀態，不刪除 Firebase 資料
+const handleLogout = async () => {
+  await clearLoginSessionFromDevice();
+  clearAuthToken();
+
+  setEmail('');
+  setPassword('');
+  setConfirmPassword('');
+  setNickname('');
+  setInputInviteCode('');
+  setUserRole('eat');
+  setFamilyGroupName('');
+setGroupInviteCode('');
+setGroupRole('member');
+
+setIsEditingProfile(false);
+setCurrentTab('home');
+setAppStage('login');
+setDynamicCategories(INITIAL_TAG_CATEGORIES);
+  
+};
+
+
+// 用途：刪除帳號前重新輸入密碼確認
+const [deleteAccountModalVisible, setDeleteAccountModalVisible] = useState(false);
+const [deleteAccountPasswordInput, setDeleteAccountPasswordInput] = useState('');
+const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+
+// 用途：在刪除帳號 Modal 裡按「確認刪除」後執行
+// 先重新驗證密碼，再真正刪除帳號
+const handleConfirmDeleteMyAccount = async () => {
+  try {
+    if (isDeletingAccount) return;
+
+    if (!deleteAccountPasswordInput.trim()) {
+      return showMessage('請輸入帳號密碼，確認刪除帳號。');
+    }
+
+    setIsDeletingAccount(true);
+
+    // 先重新驗證身份，成功後 Firebase 才允許刪帳號
+    await reauthenticateCurrentUser(email, deleteAccountPasswordInput.trim());
+
+    // 重新驗證成功後，再執行原本的刪帳流程
+    await handleDeleteMyAccount(true);
+
+    setDeleteAccountModalVisible(false);
+    setDeleteAccountPasswordInput('');
+    setIsDeletingAccount(false);
+  } catch (error) {
+    console.log('handleConfirmDeleteMyAccount error:', error);
+
+    setIsDeletingAccount(false);
+
+    const message = String(error?.message || error);
+
+    if (
+      message.includes('CREDENTIAL_TOO_OLD_LOGIN_AGAIN') ||
+      message.includes('requires-recent-login') ||
+      message.includes('auth/requires-recent-login')
+    ) {
+      return showMessage(
+        '為了保障帳號安全，請重新輸入密碼。'
+      );
+    }
+
+    if (
+      message.includes('INVALID_PASSWORD') ||
+      message.includes('wrong-password') ||
+      message.includes('auth/wrong-password') ||
+      message.includes('INVALID_LOGIN_CREDENTIALS')
+    ) {
+      return showMessage('密碼錯誤', '你輸入的密碼不正確，請再試一次。');
+    }
+
+    showMessage('刪除帳號失敗', error.message || String(error));
+  }
+};
+// 用途：刪除帳號，並處理群組 membership、admin 權限、菜式匿名化
+// alreadyReauthenticated = true 代表已經重新輸入密碼驗證，可以正式刪除
+const handleDeleteMyAccount = async (alreadyReauthenticated = false) => {
+  try {
+    // 用途：避免 React Native onPress 傳入 event object，被誤判成 true
+    const hasReauthenticated = alreadyReauthenticated === true;
+
+    // 第一次按刪除帳號時，不直接刪，先打開密碼確認 Modal
+    if (!hasReauthenticated) {
+      setDeleteAccountPasswordInput('');
+      setDeleteAccountModalVisible(true);
+      return;
+    }
+
+    const users = await db.collection('users').getAll();
+    const me = users.find(u => u.email === email);
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    // =========================
+    // 1. 若有群組，先移除 membership 及 admin 身份
+    // =========================
+    if (currentGroup) {
+      const oldMemberEmails = Array.isArray(currentGroup.memberEmails)
+        ? currentGroup.memberEmails
+        : [];
+
+      const oldMemberNames = Array.isArray(currentGroup.memberNames)
+        ? currentGroup.memberNames
+        : [];
+
+      const removeIndex = oldMemberEmails.findIndex(e => e === email);
+
+      const memberEmails = oldMemberEmails.filter(e => e !== email);
+
+      const memberNames =
+        removeIndex >= 0
+          ? oldMemberNames.filter((_, index) => index !== removeIndex)
+          : oldMemberNames.filter(n => n !== nickname);
+
+      let adminEmails = Array.isArray(currentGroup.adminEmails)
+        ? currentGroup.adminEmails.filter(e => e !== email)
+        : [];
+
+      // 如果自己刪帳後群組仍有人，但沒有 admin，就按加入順序補第一位做 admin
+      if (adminEmails.length === 0 && memberEmails.length > 0) {
+        adminEmails = [memberEmails[0]];
+      }
+
+      // 如果自己離開後，群組已經沒有任何成員，先提醒再刪除群組
+if (memberEmails.length === 0) {
+  const confirmed = await confirmLastMemberLeaveGroup();
+
+  if (!confirmed) {
+    return;
+  }
+
+  await db.collection('familyGroups').delete(currentGroup.id);
+} else {
+  await db.collection('familyGroups').update(currentGroup.id, {
+    groupName: currentGroup.groupName || '',
+    inviteCode: currentGroup.inviteCode || '',
+    createdByEmail: currentGroup.createdByEmail || '',
+    createdByNickname: currentGroup.createdByNickname || '',
+
+    // ownerEmail 只作建立者紀錄，不再影響權限
+    ownerEmail: currentGroup.ownerEmail || '',
+
+    // 真正權限來源
+    adminEmails: adminEmails,
+
+    memberNames: memberNames,
+    memberEmails: memberEmails,
+    createdAt: currentGroup.createdAt || new Date()
+  });
+}
+
+      // 如果自動補了 admin，同步更新該 admin 的 users profile
+      for (const adminEmail of adminEmails) {
+        const adminUser = users.find(u => u.email === adminEmail);
+
+        if (adminUser) {
+          await db.collection('users').update(adminUser.id, {
+            uid: adminUser.uid || '',
+            email: adminUser.email || '',
+            nickname: adminUser.nickname || '',
+            userRole: adminUser.userRole || 'eat',
+            familyGroupName: currentGroup.groupName || '',
+            groupInviteCode: currentGroup.inviteCode || '',
+            groupRole: 'admin',
+            accountStatus: adminUser.accountStatus || 'active',
+            createdAt: adminUser.createdAt || new Date()
+          });
+        }
+      }
+    }
+
+    // =========================
+    // 2. 處理 dishes
+    // =========================
+    const allDishes = await db.collection('dishes').getAll();
+    const safeDishes = Array.isArray(allDishes) ? allDishes : [];
+    const myDishes = safeDishes.filter(d => d.createdByEmail === email);
+
+    for (const dish of myDishes) {
+      const status = String(
+        dish.publishStatus ?? (dish.isPublic ? 'approved' : 'private')
+      ).trim().toLowerCase();
+
+      // pending 菜：直接刪除
+      if (status === 'pending') {
+        await db.collection('dishes').delete(dish.id);
+      } else {
+        // private / approved：保留，但匿名化
+        await db.collection('dishes').update(dish.id, {
+          name: dish.name || '',
+          ingredients: dish.ingredients || '',
+          tags: dish.tags || [],
+          createdByEmail: '',
+          createdByNickname: '已刪除用戶',
+          createdByDeleted: true,
+          familyGroupName: dish.familyGroupName || '',
+          groupCode: dish.groupCode || '',
+          isPublic: dish.isPublic || false,
+          requestedPublic: dish.requestedPublic || false,
+          publishStatus: dish.publishStatus || (dish.isPublic ? 'approved' : 'private'),
+
+          // 保留群組隱藏紀錄
+          hiddenForGroups: Array.isArray(dish.hiddenForGroups) ? dish.hiddenForGroups : [],
+
+          createdAt: dish.createdAt || new Date()
+        });
+      }
+    }
+
+    // =========================
+    // 3. soft delete user profile
+    // =========================
+    if (me) {
+      await db.collection('users').update(me.id, {
+        uid: me.uid || '',
+        email: email,
+        nickname: nickname,
+        userRole: userRole || 'eat',
+        familyGroupName: '',
+        groupInviteCode: '',
+        groupRole: 'member',
+        accountStatus: 'deleted',
+        deletedAt: new Date(),
+        createdAt: me.createdAt || new Date()
+      });
+    }
+
+    // =========================
+    // 4. 刪 Firebase Auth 帳號
+    // =========================
+    await deleteCurrentAccount();
+
+    // =========================
+    // 5. 清本機 state
+    // =========================
+  await clearLoginSessionFromDevice();
+
+    clearAuthToken();
+
+    setEmail('');
+    setPassword('');
+    setConfirmPassword('');
+    setNickname('');
+    setInputInviteCode('');
+    setGroupInviteCode('');
+    setUserRole('eat');
+    setFamilyGroupName('');
+    setGroupRole('member');
+    setGroupAdminEmails([]);
+    setGroupMembers([]);
+
+    setIsEditingProfile(false);
+    setIsDishEditMode(false);
+    setDishEditSearchQuery('');
+
+    setAppStage('login');
+    setCurrentTab('home');
+
+    showMessage('你的帳戶已被刪除');
+  } catch (error) {
+    console.log('handleDeleteMyAccount error:', error);
+    showMessage('刪除帳號失敗', error.message || String(error));
+  }
+};
+
+// 用途：儲存個人資料、角色及群組名稱到 Firebase
+const handleSaveProfile = async () => {
+  try {
+    const newNickname = editNickname.trim();
+    const newRole = editRole || 'eat';
+    const newGroupName = editGroupName.trim();
+
+    console.log('準備儲存 profile');
+    console.log('newNickname:', newNickname);
+    console.log('newRole:', newRole);
+    console.log('newGroupName:', newGroupName);
+
+    if (!newNickname) {
+      return showMessage('暱稱不能留空。');
+    }
+
+    if (!newGroupName) {
+      return showMessage('群組名稱不能留空。');
+    }
+
+    // 1. 找回自己的 user profile
+    const users = await db.collection('users').getAll();
+    const me = users.find(u => u.email === email);
+
+    if (!me) {
+      return showMessage('電郵未有登記，請重新登入。');
+    }
+
+    let currentGroup = null;
+    let currentAdminEmails = Array.isArray(groupAdminEmails) ? groupAdminEmails : [];
+    let finalGroupRole = currentAdminEmails.includes(email) ? 'admin' : 'member';
+
+    // 2. 如果有群組，更新 familyGroups 裡面的 groupName 及 memberNames
+    if (groupInviteCode) {
+      const groups = await db.collection('familyGroups').getAll();
+      currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+      if (!currentGroup) {
+        return showMessage('沒有此群組，請重新登入。');
+      }
+
+      const oldMemberEmails = Array.isArray(currentGroup.memberEmails)
+        ? currentGroup.memberEmails
+        : [];
+
+      const oldMemberNames = Array.isArray(currentGroup.memberNames)
+        ? currentGroup.memberNames
+        : [];
+
+      currentAdminEmails = Array.isArray(currentGroup.adminEmails)
+        ? currentGroup.adminEmails
+        : [];
+
+      finalGroupRole = currentAdminEmails.includes(email) ? 'admin' : 'member';
+
+      // 用 email 的位置來更新 memberNames，避免同名成員被錯改
+      const myIndex = oldMemberEmails.findIndex(e => e === email);
+
+      let updatedMemberNames = [...oldMemberNames];
+
+      if (myIndex >= 0) {
+        updatedMemberNames[myIndex] = newNickname;
+      } else if (!updatedMemberNames.includes(newNickname)) {
+        updatedMemberNames.push(newNickname);
+      }
+
+      await db.collection('familyGroups').update(currentGroup.id, {
+        groupName: newGroupName,
+        inviteCode: currentGroup.inviteCode || '',
+        createdByEmail: currentGroup.createdByEmail || '',
+        createdByNickname: currentGroup.createdByNickname || '',
+
+        // ownerEmail 只作建立者紀錄，不再影響權限
+        ownerEmail: currentGroup.ownerEmail || '',
+
+        // 真正權限來源
+        adminEmails: currentAdminEmails,
+
+        memberNames: updatedMemberNames,
+        memberEmails: oldMemberEmails,
+        createdAt: currentGroup.createdAt || new Date()
+      });
+    }
+
+    // 3. 更新自己 users profile
+    await db.collection('users').update(me.id, {
+      uid: me.uid || '',
+      email: email,
+      nickname: newNickname,
+
+      // 重要：這裡一定要用 newRole
+      userRole: newRole,
+
+      familyGroupName: groupInviteCode ? newGroupName : '',
+      groupInviteCode: groupInviteCode || '',
+
+      // groupRole 只用 admin / member，不再用 owner
+      groupRole: finalGroupRole,
+
+      accountStatus: me.accountStatus || 'active',
+      createdAt: me.createdAt || new Date()
+    });
+
+    // 4. 同步更新同一群組其他成員 users 入面的 familyGroupName 及 groupRole
+    if (groupInviteCode) {
+      const sameGroupUsers = users.filter(u =>
+        u.groupInviteCode === groupInviteCode && u.email !== email
+      );
+
+      for (const member of sameGroupUsers) {
+        const memberGroupRole = currentAdminEmails.includes(member.email)
+          ? 'admin'
+          : 'member';
+
+        await db.collection('users').update(member.id, {
+          uid: member.uid || '',
+          email: member.email || '',
+          nickname: member.nickname || '',
+          userRole: member.userRole || 'eat',
+          familyGroupName: newGroupName,
+          groupInviteCode: member.groupInviteCode || '',
+
+          // 同群組其他人也只用 admin / member
+          groupRole: memberGroupRole,
+
+          accountStatus: member.accountStatus || 'active',
+          createdAt: member.createdAt || new Date()
+        });
+      }
+    }
+
+    // 5. 更新本機畫面 state
+    setNickname(newNickname);
+    setUserRole(newRole);
+    setFamilyGroupName(groupInviteCode ? newGroupName : '');
+    setGroupRole(finalGroupRole);
+    setGroupAdminEmails(currentAdminEmails);
+
+    setEditNickname(newNickname);
+    setEditRole(newRole);
+    setEditGroupName(newGroupName);
+
+    setIsEditingProfile(false);
+
+  } catch (error) {
+    console.log('handleSaveProfile error:', error);
+    showMessage('更新失敗', error.message || String(error));
+  }
+};
+
+const HONG_KONG_APPROVED_DISHES = [
+  {
+    id: 'hk_dish_001',
+    name: '蕃茄炒蛋',
+    ingredients: '蕃茄、雞蛋、蔥花、蒜頭、糖、鹽',
+    tags: ['🥚 蛋類', '🌽 瓜果', '🇭🇰 港式', '🔥 煎炒', '⏱️ 快手菜', '🏠 家常菜'],
+    isPublic: true,
+    requestedPublic: false,
+    publishStatus: 'approved',
+    groupCode: '',
+    familyGroupName: ''
+  },
+  {
+    id: 'hk_dish_002',
+    name: '薯仔炆雞翼',
+    ingredients: '雞翼、薯仔、洋蔥、蒜頭、薑、生抽、老抽、蠔油',
+    tags: ['🐔 雞肉', '🥕 根莖', '🇭🇰 港式', '🥘 燜燉', '🏠 家常菜'],
+    isPublic: true,
+    requestedPublic: false,
+    publishStatus: 'approved',
+    groupCode: '',
+    familyGroupName: ''
+  },
+  {
+    id: 'hk_dish_003',
+    name: '蒸水蛋',
+    ingredients: '雞蛋、清水、鹽、豉油、蔥花',
+    tags: ['🥚 蛋類', '🇭🇰 港式', '💨 蒸煮', '♨️ 蒸餸', '⏱️ 快手菜', '🏠 家常菜'],
+    isPublic: true,
+    requestedPublic: false,
+    publishStatus: 'approved',
+    groupCode: '',
+    familyGroupName: ''
+  }
+];
+
+// 用途：admin 一鍵匯入香港 approved 公開菜式
+const handleImportHongKongApprovedDishes = async () => {
+  try {
+    if (!isCurrentUserAdmin) {
+      return showMessage('沒有權限', '只有 admin 可以匯入預設菜式。');
+    }
+
+    const allDishes = await db.collection('dishes').getAll();
+    const safeDishes = Array.isArray(allDishes) ? allDishes : [];
+
+    let addedCount = 0;
+    let skippedCount = 0;
+
+    for (const dish of HONG_KONG_APPROVED_DISHES) {
+      const alreadyExists = safeDishes.some(existing =>
+        existing.seedKey === dish.id
+      );
+
+      if (alreadyExists) {
+        skippedCount += 1;
+        continue;
+      }
+
+      const dishData = {
+        name: dish.name || '',
+        ingredients: dish.ingredients || '未填寫',
+        tags: Array.isArray(dish.tags) ? dish.tags : [],
+
+        seedKey: dish.id || '',
+        seedSource: 'hong_kong_approved_dishes',
+
+        createdByEmail: email || '',
+        createdByNickname: nickname || '',
+
+        familyGroupName: '',
+        groupCode: '',
+
+        isPublic: true,
+        requestedPublic: false,
+        publishStatus: 'approved',
+
+        hiddenForGroups: [],
+        createdAt: new Date()
+      };
+
+      const result = await db.collection('dishes').add(dishData);
+
+      const localDish = {
+        id: result.name ? result.name.split('/').pop() : `${Date.now()}-${Math.random()}`,
+        ...dishData
+      };
+
+      setDishes(prev => [localDish, ...prev]);
+
+      addedCount += 1;
+    }
+
+    showMessage(
+      '匯入完成',
+      `已新增 ${addedCount} 道公開香港菜式。\n已略過 ${skippedCount} 道已存在菜式。`
+    );
+  } catch (error) {
+    console.log('handleImportHongKongApprovedDishes error:', error);
+    showMessage('匯入失敗', error.message || String(error));
+  }
+};
+
+
+// 常見食材與分類庫
+const INITIAL_TAG_CATEGORIES = {
+  ingredients: {
+    title: '🥩 食物種類',
+    isNested: true,
+    subCategories: {
+      meat: { title: '🍖 肉類與蛋類', tags: ['🐷 豬肉', '🥩 牛肉', '🐔 雞肉', '🐑 羊肉', '🦆 鴨肉', '🥚 蛋類'] },
+      vegie: { title: '🥬 蔬菜與豆品', tags: ['🥬 葉菜', '🥕 根莖', '🍄 菇菌', '🫘 豆類', '🧀 豆腐', '🌽 瓜果', '🌽 栗米'] },
+      seafood: { title: '🐟 海鮮類', tags: ['🐟 魚', '🦐 蝦', '🦀 蟹', '🦪 貝', '🦑 魷魚'] },
+      staple: { title: '🍚 主食與麵點', tags: ['🍚 白飯', '🍜 麵條', '🥟 水餃', '🍞 麵包', '🍞 吐司'] }
+    }
+  },
+  cuisine: { title: '🌐 菜式地區', tags: ['🇨🇳 中式', '🇭🇰 港式', '🇯🇵 日式', '🇰🇷 韓式', '🇹🇭 泰式', '🇮🇹 西式','🇹🇼 台式',] },
+  method: { title: '🍳 烹調方式', tags: ['🔥 煎炒', '💨 蒸煮', '♨️ 蒸餸', '🥘 燜燉', '🍗 酥炸', '🥗 涼拌', '🔥 烘烤', '💨 氣炸', '🍲 火鍋', '🍲 湯底', '🔥 鑊氣', '🍲 煲仔飯'] },
+  flavour: { title: '😋 味道', tags: ['🍯 酸甜', '🍛 咖喱', '🌶️ 辣味', '🧂 清淡'] },
+  lifestyle: { title: '🍽️ 菜式類型', tags: ['🍰 甜品', '🥟 點心', '⏱️ 快手菜', '🏠 家常菜', '🥤 茶餐廳', '🍢 大牌檔', '🧓 老火湯', '🥗 低卡減脂', '🌱 純素', '🌱 蔬食'] }
+};
+
+
+const INITIAL_DISHES = [
+  { id: '1', name: '番茄炒蛋', tags: ['🥬 葉菜', '🥚 蛋類', '🇭🇰 港式', '⏱️ 快手菜'], ingredients: '番茄、雞蛋', isPublic: true, groupCode: '' },
+  { id: '2', name: '青紅蘿蔔豬骨湯', tags: ['🍲 湯底', '🇭🇰 港式', '🥘 燜燉', '🐷 豬肉', '🥕 根莖'], ingredients: '青蘿蔔、紅蘿蔔、豬骨', isPublic: true, groupCode: '' },
+  { id: '3', name: '打拋豬肉飯', tags: ['🐷 豬肉', '🇹🇭 泰式', '🔥 煎炒', '🍚 白米飯'], ingredients: '豬肉碎、九層塔、辣椒', isPublic: true, groupCode: '' },
+  { id: '4', name: '楊枝甘露', tags: ['🌱 蔬食'], ingredients: '芒果, 西米, 椰汁', isPublic: true, groupCode: 'HOME123' },
+  { id: '5', name: '香煎肋眼牛排', tags: ['🥩 牛肉', '🇮🇹 西式', '🔥 煎炒'], ingredients: '牛排、蒜頭、迷迭香', isPublic: false, groupCode: '' },
+];
+
+//月曆
+const formatDateToString = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+const normalizeDateString = (dateStr) => {
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+
+  const y = parts[0];
+  const m = String(parts[1]).padStart(2, '0');
+  const d = String(parts[2]).padStart(2, '0');
+
+  return `${y}-${m}-${d}`;
+};
+
+const isPastDate = (dateStr) => {
+  const normalized = normalizeDateString(dateStr);
+  const today = formatDateToString(CURRENT_DATE);
+  return normalized < today;
+};
+
+
+const showMessage = (title, message) => {
+  if (Platform.OS === 'web') {
+    alert(`${title}\n${message}`);
+  } else {
+    Alert.alert(title, message);
+  }
+};
+// 用途：有按鈕選項的提示訊息
+const showConfirmMessage = (title, message, buttons = []) => {
+  if (Platform.OS === 'web') {
+    const confirmed = window.confirm(`${title}\n${message}`);
+
+    if (confirmed) {
+      const confirmButton = buttons.find(btn => btn.text !== '先不用' && btn.style !== 'cancel');
+      if (confirmButton && typeof confirmButton.onPress === 'function') {
+        confirmButton.onPress();
+      }
+    }
+
+    return;
+  }
+
+  Alert.alert(title, message, buttons);
+};
+
+ 
+
+  // 控制首頁大分類標籤摺疊狀態
+  const [expandedCategories, setExpandedCategories] = useState({
+    ingredients: false, cuisine: false, method: false, lifestyle: false,
+  });
+
+
+  const toggleCategoryExpand = (key) => {
+    setExpandedCategories(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+
+
+// request response
+const getStatusLabel = (status) => {
+  switch (status) {
+    case 'approved': return '✅ 已同意';
+    case 'rejected': return '❌ 已拒絕';
+    case 'pending': return '⏳ 等待回應';
+    case 'completed': return '✅ 已完成';
+    default: return '❓ 未知';
+  }
+};
+
+  // ========================================================
+  // ✨ ✨ 這裡開始是全新優化的管理標籤狀態與邏輯 ✨ ✨
+  // ========================================================
+  const [dynamicCategories, setDynamicCategories] = useState(INITIAL_TAG_CATEGORIES);
+  const [dishes, setDishes] = useState(INITIAL_DISHES);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTags, setSelectedTags] = useState([]);
+ 
+  const [currentYear, setCurrentYear] = useState(CURRENT_DATE.getFullYear());
+  const [currentMonth, setCurrentMonth] = useState(CURRENT_DATE.getMonth() + 1);
+
+
+  const [requestModalVisible, setRequestModalVisible] = useState(false);
+  const [selectedDish, setSelectedDish] = useState(null);
+
+
+
+
+
+  // 半分頁專用 State
+  const [customModalVisible, setCustomModalVisible] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newModalTagName, setNewModalTagName] = useState('');
+  const [selectedModalCat, setSelectedModalCat] = useState('none');
+  const [selectedSubModalCat, setSelectedSubModalCat] = useState('');
+  const [showMoreModalCats, setShowMoreModalCats] = useState(false);
+  const [isEditingCustomTags, setIsEditingCustomTags] = useState(false);
+  const [selectedCustomTagNames, setSelectedCustomTagNames] = useState([]);
+  const [selectedCustomCategoryKeys, setSelectedCustomCategoryKeys] = useState([]);
+
+// 用途：控制「已隱藏菜式管理」Modal
+const [hiddenDishesModalVisible, setHiddenDishesModalVisible] = useState(false);
+
+// 用途：每次打開管理標籤分頁時，編輯區都先收起，並清空已勾選項目
+useEffect(() => {
+  if (customModalVisible) {
+    setIsEditingCustomTags(false);
+    setSelectedCustomTagNames([]);
+    setSelectedCustomCategoryKeys([]);
+  }
+}, [customModalVisible]);
+
+  // 下拉選單控制狀態
+  const [cookDropdownOpen, setCookDropdownOpen] = useState(false);
+  const [mealDropdownOpen, setMealDropdownOpen] = useState(false);
+  // 用途：所有可選餐次，點菜和改期都可共用
+const MEAL_OPTIONS = ['早餐', '午餐','下午茶', '晚餐',  '宵夜'];
+ 
+const [targetCook, setTargetCook] = useState('');
+const [targetCookEmail, setTargetCookEmail] = useState('');
+
+// 用途：提出想吃時選擇餐次
+// 不再硬性預設晚餐；如果之前選過，就沿用上一次
+const [selectedMeal, setSelectedMeal] = useState('');
+const [lastSelectedMeal, setLastSelectedMeal] = useState('');
+
+// 用途：提出想吃時是否加入自己的購物清單
+// null = 尚未選擇，true = 加入，false = 不加入
+const [autoAddToList, setAutoAddToList] = useState(null);
+const [lastAutoAddToList, setLastAutoAddToList] = useState(null);
+
+const [customDateInput, setCustomDateInput] = useState(formatDateToString(CURRENT_DATE));
+
+// 用途：大廚同意 request 時，是否把材料加入購物清單
+// null = 尚未選擇，true = 加入，false = 不加入
+const [approveAddToList, setApproveAddToList] = useState(null);
+const [lastApproveAddToList, setLastApproveAddToList] = useState(null);
+
+// 用途：大廚拒絕 / 取消 request 時填寫原因，可空白
+const [rejectModalVisible, setRejectModalVisible] = useState(false);
+const [rejectTargetRequest, setRejectTargetRequest] = useState(null);
+const [rejectReasonInput, setRejectReasonInput] = useState('');
+
+// 用途：大廚改期時填寫原因，可空白
+const [rescheduleReasonInput, setRescheduleReasonInput] = useState('');
+
+// 用途：從 Firebase requests collection 讀取的點菜要求
+const [requests, setRequests] = useState([]);
+
+// 用途：控制收到的點菜要求 Modal
+const [requestInboxVisible, setRequestInboxVisible] = useState(false);
+// 用途：控制「大廚通知」彈出視窗
+const [senderNotificationModalVisible, setSenderNotificationModalVisible] = useState(false);
+
+// 用途：本次 App 使用期間已看過的大廚通知，避免關閉後立即再彈
+const [dismissedCookMessageKeys, setDismissedCookMessageKeys] = useState([]);
+// 改期專用 Modal State
+const [rescheduleModalVisible, setRescheduleModalVisible] = useState(false);
+const [rescheduleTargetId, setRescheduleTargetId] = useState(null);
+const [rescheduleDateInput, setRescheduleDateInput] = useState('');
+
+// 用途：改期時也可以修改餐次；預設用原本 request 的 meal
+const [rescheduleMealInput, setRescheduleMealInput] = useState('');
+
+// 用途：控制改期 Modal 內餐次選項是否展開
+const [rescheduleMealOptionsVisible, setRescheduleMealOptionsVisible] = useState(false);
+
+// 用途：避免狂按「確認改期」時重複送出
+const [isRescheduleSubmitting, setIsRescheduleSubmitting] = useState(false);
+
+// 用途：判斷 request 是否屬於同一個排餐要求
+// 同一群組 + 同一菜式 + 同一日期 + 同一餐次 = 同一個 request
+// 不包含 sender，也不包含 targetCook，因為 A給B / B給A 都要合併
+// 但一定要包含 date 和 meal，否則 6月4日和6月11日會被錯誤合併
+const getRequestUniqueKey = (req) => {
+  return [
+    req.groupCode || '',
+    req.dishId || req.dishName || '',
+    req.date || '',
+    req.meal || ''
+  ].join('|');
+};
+
+// 用途：家庭動態顯示時，把同一群組 / 同一菜式 / 同一日期 / 同一餐次的 request 合併成一張卡
+// 重要：主顯示資料以 updatedAt 最新的一筆為準，避免 cookMessage / rejected / 改期通知被舊資料蓋住
+const uniqueRequests = useMemo(() => {
+  const map = new Map();
+
+  // 用途：把 Firestore timestamp / Date string 轉成可比較時間
+  const getTimeValue = (value) => {
+    if (!value) return 0;
+
+    const time = new Date(value).getTime();
+    return Number.isNaN(time) ? 0 : time;
+  };
+
+  (requests || []).forEach(req => {
+    const key = getRequestUniqueKey(req);
+
+    const senderName =
+      req.senderNickname ||
+      req.sender ||
+      req.senderEmail ||
+      '未知';
+
+    const targetCookName =
+      req.targetCookName ||
+      req.target ||
+      req.targetCookEmail ||
+      '未知';
+
+    const senderEmail = req.senderEmail || '';
+    const targetCookEmail = req.targetCookEmail || '';
+
+    if (!map.has(key)) {
+      map.set(key, {
+        ...req,
+
+        // 用途：之後同意 / 拒絕 / 改期時，可以一次處理所有合併的 request
+        mergedRequestIds: [req.id],
+
+        // 用途：顯示所有發起人
+        mergedSenders: [senderName],
+        mergedSenderEmails: senderEmail ? [senderEmail] : [],
+
+        // 用途：顯示所有被指定的大廚
+        mergedCooks: [targetCookName],
+        mergedCookEmails: targetCookEmail ? [targetCookEmail] : []
+      });
+
+      return;
+    }
+
+    const existing = map.get(key);
+
+    const mergedRequestIds = Array.from(
+      new Set([
+        ...(existing.mergedRequestIds || []),
+        req.id
+      ])
+    );
+
+    const mergedSenders = Array.from(
+      new Set([
+        ...(existing.mergedSenders || []),
+        senderName
+      ])
+    );
+
+    const mergedSenderEmails = Array.from(
+      new Set([
+        ...(existing.mergedSenderEmails || []),
+        ...(senderEmail ? [senderEmail] : [])
+      ])
+    );
+
+    const mergedCooks = Array.from(
+      new Set([
+        ...(existing.mergedCooks || []),
+        targetCookName
+      ])
+    );
+
+    const mergedCookEmails = Array.from(
+      new Set([
+        ...(existing.mergedCookEmails || []),
+        ...(targetCookEmail ? [targetCookEmail] : [])
+      ])
+    );
+
+    // 用途：決定這張合併卡主要顯示哪一筆資料
+    // 原則：updatedAt 最新的一筆為主
+    // 這樣 rejected / cookMessage / rescheduleReason 不會被舊 approved 資料蓋住
+    const existingTime = getTimeValue(existing.updatedAt || existing.createdAt);
+    const reqTime = getTimeValue(req.updatedAt || req.createdAt);
+
+    const latestBase = reqTime >= existingTime ? req : existing;
+
+    map.set(key, {
+      ...latestBase,
+
+      // 保留合併資料
+      mergedRequestIds,
+      mergedSenders,
+      mergedSenderEmails,
+      mergedCooks,
+      mergedCookEmails
+    });
+  });
+
+  return Array.from(map.values());
+}, [requests]);
+// 用途：產生大廚通知唯一 key
+// 如果同一 request 後來有新 cookMessage / updatedAt，就會變成新的通知
+const getCookMessageKey = (req) => {
+  return [
+    req.id || '',
+    req.updatedAt || '',
+    req.cookMessage || ''
+  ].join('|');
+};
+// 用途：目前登入者收到、尚未處理的點菜要求
+// 注意：這裡用原始 requests，不用 uniqueRequests
+// 因為 inbox 要判斷是否有 request 傳給自己
+const incomingRequests = useMemo(() => {
+  return (requests || []).filter(req =>
+    req.targetCookEmail === email &&
+    req.status === 'pending'
+  );
+}, [requests, email]);
+
+// 用途：目前登入者收到大廚改期 / 拒絕 / 取消通知
+// 通知對象：其他發起人 + 其他大廚
+// 不通知實際操作的大廚自己
+const senderNotifications = useMemo(() => {
+  return (uniqueRequests || []).filter(req => {
+    const senderEmails = Array.isArray(req.mergedSenderEmails)
+      ? req.mergedSenderEmails
+      : (req.senderEmail ? [req.senderEmail] : []);
+
+    const cookEmails = Array.isArray(req.mergedCookEmails)
+      ? req.mergedCookEmails
+      : (req.targetCookEmail ? [req.targetCookEmail] : []);
+
+    // 通知對象：發起人或大廚
+    const isRelatedPerson =
+      email &&
+      (
+        senderEmails.includes(email) ||
+        cookEmails.includes(email)
+      );
+
+    const hasMessage =
+      req.cookMessage &&
+      String(req.cookMessage).trim() !== '';
+
+    // 找出這次通知是誰操作的
+    // 改期用 rescheduledByEmail
+    // 拒絕 / 取消用 rejectedByEmail
+    const actionByEmail =
+      req.rescheduledByEmail ||
+      req.rejectedByEmail ||
+      '';
+
+    // 不通知操作人自己
+    const isActionUser = email && actionByEmail === email;
+
+    const readByEmails = Array.isArray(req.cookMessageReadByEmails)
+      ? req.cookMessageReadByEmails
+      : [];
+
+    const alreadyReadInFirebase =
+      email && readByEmails.includes(email);
+
+    const messageKey = getCookMessageKey(req);
+
+    const alreadyDismissedThisSession =
+      dismissedCookMessageKeys.includes(messageKey);
+
+    return (
+      isRelatedPerson &&
+      hasMessage &&
+      !isActionUser &&
+      !alreadyReadInFirebase &&
+      !alreadyDismissedThisSession
+    );
+  });
+}, [uniqueRequests, email, dismissedCookMessageKeys]);
+
+// 用途：如果目前登入者有 pending 點菜要求，打開 App 後自動彈出處理視窗
+// 並沿用大廚上一次「是否加入購物清單」選項
+useEffect(() => {
+  if (appStage === 'main' && incomingRequests.length > 0) {
+    setApproveAddToList(lastApproveAddToList);
+    setRequestInboxVisible(true);
+  }
+}, [appStage, incomingRequests.length, lastApproveAddToList]);
+// 用途：如果發起人收到大廚通知，自動彈出「大廚通知」視窗
+useEffect(() => {
+  if (appStage === 'main' && senderNotifications.length > 0) {
+    setSenderNotificationModalVisible(true);
+  }
+
+  if (senderNotifications.length === 0) {
+    setSenderNotificationModalVisible(false);
+  }
+}, [appStage, senderNotifications.length]);
+
+// 用途：排序後的家庭動態 request
+// completed 已完成的排餐不再顯示在下方排餐動態，但仍會保留給月曆使用
+const sortedRequests = [...(uniqueRequests || [])]
+  .filter(req => req.status !== 'completed')
+  .sort((a, b) => {
+    const dateA = new Date(a.date || '').getTime();
+    const dateB = new Date(b.date || '').getTime();
+
+    const safeDateA = Number.isNaN(dateA) ? 0 : dateA;
+    const safeDateB = Number.isNaN(dateB) ? 0 : dateB;
+
+    if (safeDateA !== safeDateB) {
+      return safeDateA - safeDateB;
+    }
+
+    const updatedA = new Date(a.updatedAt || a.createdAt || '').getTime();
+    const updatedB = new Date(b.updatedAt || b.createdAt || '').getTime();
+
+    const safeUpdatedA = Number.isNaN(updatedA) ? 0 : updatedA;
+    const safeUpdatedB = Number.isNaN(updatedB) ? 0 : updatedB;
+
+    return safeUpdatedB - safeUpdatedA;
+  });
+
+// 用途：月曆上標示已同意排餐的日期
+// 用 uniqueRequests，避免同一餐多個 request 令月曆重複計算
+const approvedDates = Array.from(
+  new Set(
+    (uniqueRequests || [])
+      .filter(req => req.status === 'approved')
+      .map(req => normalizeDateString(req.date))
+  )
+);
+
+// 用途：月曆上標示已完成排餐的日期
+const completedDates = Array.from(
+  new Set(
+    (uniqueRequests || [])
+      .filter(req => req.status === 'completed')
+      .map(req => normalizeDateString(req.date))
+  )
+);
+// 用途：把某個大廚通知標記為已讀，並寫入 Firebase
+const markCookMessageAsReadInFirebase = async (reqItem) => {
+  try {
+    if (!email) return;
+
+    const ids = Array.isArray(reqItem?.mergedRequestIds)
+      ? reqItem.mergedRequestIds
+      : [reqItem?.id];
+
+    const targetRequests = (requests || []).filter(req =>
+      ids.includes(req.id)
+    );
+
+    for (const targetReq of targetRequests) {
+      const oldReadByEmails = Array.isArray(targetReq.cookMessageReadByEmails)
+        ? targetReq.cookMessageReadByEmails
+        : [];
+
+      const nextReadByEmails = Array.from(
+        new Set([...oldReadByEmails, email])
+      );
+
+      await db.collection('requests').update(targetReq.id, {
+        dishId: targetReq.dishId || '',
+        dishName: targetReq.dishName || '',
+        ingredients: targetReq.ingredients || '',
+
+        groupCode: targetReq.groupCode || groupInviteCode || '',
+        familyGroupName: targetReq.familyGroupName || familyGroupName || '',
+
+        groupMemberEmails:
+          Array.isArray(targetReq.groupMemberEmails) && targetReq.groupMemberEmails.length > 0
+            ? targetReq.groupMemberEmails
+            : getCurrentGroupMemberEmails(),
+
+        groupAdminEmails:
+          Array.isArray(targetReq.groupAdminEmails) && targetReq.groupAdminEmails.length > 0
+            ? targetReq.groupAdminEmails
+            : (Array.isArray(groupAdminEmails) ? groupAdminEmails : []),
+
+        senderEmail: targetReq.senderEmail || '',
+        senderNickname: targetReq.senderNickname || targetReq.sender || '',
+
+        targetCookEmail: targetReq.targetCookEmail || '',
+        targetCookName: targetReq.targetCookName || targetReq.target || '',
+
+        date: targetReq.date || '',
+        meal: targetReq.meal || '晚餐',
+
+        status: targetReq.status || 'pending',
+
+        autoAddToList: targetReq.autoAddToList || false,
+        cookApprovedAddToList: targetReq.cookApprovedAddToList || false,
+
+        cookMessage: targetReq.cookMessage || '',
+        rejectionReason: targetReq.rejectionReason || '',
+        rescheduleReason: targetReq.rescheduleReason || '',
+
+        // 重要：把目前登入者記錄為已讀
+        cookMessageReadByEmails: nextReadByEmails,
+
+        createdAt: targetReq.createdAt || new Date(),
+        updatedAt: targetReq.updatedAt || new Date(),
+
+        approvedAt: targetReq.approvedAt || '',
+        approvedByEmail: targetReq.approvedByEmail || '',
+        approvedByNickname: targetReq.approvedByNickname || '',
+
+        rejectedAt: targetReq.rejectedAt || '',
+        rejectedByEmail: targetReq.rejectedByEmail || '',
+        rejectedByNickname: targetReq.rejectedByNickname || '',
+
+        rescheduledAt: targetReq.rescheduledAt || '',
+        rescheduledByEmail: targetReq.rescheduledByEmail || '',
+        rescheduledByNickname: targetReq.rescheduledByNickname || '',
+
+        completedAt: targetReq.completedAt || '',
+        completedByEmail: targetReq.completedByEmail || '',
+        completedByNickname: targetReq.completedByNickname || ''
+      });
+    }
+  } catch (error) {
+    console.log('markCookMessageAsReadInFirebase error:', error);
+    showMessage('已讀失敗', error.message || String(error));
+  }
+};
+
+// 用途：關閉單一大廚通知
+const dismissOneCookMessage = async (req) => {
+  const key = getCookMessageKey(req);
+
+  setDismissedCookMessageKeys(prev =>
+    Array.from(new Set([...prev, key]))
+  );
+
+  await markCookMessageAsReadInFirebase(req);
+  await loadRequestsFromFirebase();
+};
+
+// 用途：關閉目前所有大廚通知
+const dismissAllCookMessages = async () => {
+  const keys = (senderNotifications || []).map(getCookMessageKey);
+
+  setDismissedCookMessageKeys(prev =>
+    Array.from(new Set([...prev, ...keys]))
+  );
+
+  for (const req of senderNotifications || []) {
+    await markCookMessageAsReadInFirebase(req);
+  }
+
+  await loadRequestsFromFirebase();
+
+  setSenderNotificationModalVisible(false);
+};
+
+// 用途：點菜 Modal 的大廚下拉選單，永遠顯示所有群組成員
+const cookOptions = useMemo(() => {
+  return Array.isArray(groupMembers) ? groupMembers : [];
+}, [groupMembers]);
+
+// 用途：打開點菜 Modal，預設選第一位 cook；但下拉選單仍然可選所有成員
+// 餐次 / 是否加入購物清單會沿用上一次選項，不再硬性預設
+const openRequestModal = (dish, targetDateStr = null) => {
+  setSelectedDish(dish);
+
+  const allMembers = Array.isArray(groupMembers) ? groupMembers : [];
+
+  const defaultCook =
+    allMembers.find(member => member.userRole === 'cook') ||
+    allMembers[0];
+
+  if (defaultCook) {
+    setTargetCook(defaultCook.name || '');
+    setTargetCookEmail(defaultCook.email || '');
+  } else {
+    setTargetCook('');
+    setTargetCookEmail('');
+  }
+
+  // 沿用上一次餐次；如果從未選過，就保持空白，要求用戶選
+  setSelectedMeal(lastSelectedMeal || '');
+
+  // 沿用上一次是否加入購物清單
+  // true = 勾選；false / null = 不勾
+  setAutoAddToList(lastAutoAddToList === true);
+
+  setCustomDateInput(targetDateStr || formatDateToString(CURRENT_DATE));
+  setCookDropdownOpen(false);
+  setMealDropdownOpen(false);
+  setRequestModalVisible(true);
+};
+
+// 抽菜
+// 用途：只從目前搜尋 / 標籤篩選後的菜式中抽
+const handleDraw = () => {
+  const drawPool = Array.isArray(displayedDishes) ? displayedDishes : [];
+
+  if (drawPool.length === 0) {
+    return showMessage(
+      selectedTags.length > 0 || searchQuery.trim()
+        ? '目前沒有符合的菜餚！'
+        : '目前沒有可用的菜餚！'
+    );
+  }
+
+  openRequestModal(
+    drawPool[Math.floor(Math.random() * drawPool.length)]
+  );
+};
+
+// 用途：取得某個標籤在目前群組菜式中出現次數
+// 注意：只計 approved 公開菜式 + 本群組 private 菜式，不計 pending，避免不同用戶看到不同排序
+const getTagUsageCount = (tagName) => {
+  const safeDishes = Array.isArray(dishes) ? dishes : [];
+
+  return safeDishes.filter(dish => {
+    const status = String(
+      dish.publishStatus ?? (dish.isPublic ? 'approved' : 'private')
+    ).trim().toLowerCase();
+
+    const dishTags = Array.isArray(dish.tags) ? dish.tags : [];
+
+    const isVisibleForGroup =
+      status === 'approved' ||
+      (
+        status === 'private' &&
+        dish.groupCode === groupInviteCode
+      );
+
+    return isVisibleForGroup && dishTags.includes(tagName);
+  }).length;
+};
+
+// 用途：取得某個分類底下所有標籤
+const getAllTagsInCategory = (category) => {
+  if (!category) return [];
+
+  if (category.isNested) {
+    let result = [];
+
+    Object.keys(category.subCategories || {}).forEach(subKey => {
+      const subCat = category.subCategories[subKey];
+      result = [...result, ...(subCat.tags || [])];
+    });
+
+    return result;
+  }
+
+  return category.tags || [];
+};
+// 用途：穩定排序子分類
+// 1. 初始時按 INITIAL_TAG_CATEGORIES 的原本順序
+// 2. 有使用數據後，使用率高的子分類排前
+// 3. 使用率相同時，回到初始順序
+// 4. 自訂子分類排在系統子分類後面；自訂之間按使用率，再按 key 固定
+const getSortedSubCategoryKeys = (catKey) => {
+  const category = dynamicCategories[catKey];
+  const subKeys = Object.keys(category?.subCategories || {});
+
+  const initialSubCategories = INITIAL_TAG_CATEGORIES[catKey]?.subCategories || {};
+  const initialSubKeys = Object.keys(initialSubCategories);
+
+  return [...subKeys].sort((a, b) => {
+    const aInitialIndex = initialSubKeys.indexOf(a);
+    const bInitialIndex = initialSubKeys.indexOf(b);
+
+    const aIsInitial = aInitialIndex !== -1;
+    const bIsInitial = bInitialIndex !== -1;
+
+    const aSubCat = category.subCategories?.[a];
+    const bSubCat = category.subCategories?.[b];
+
+    const aUsage = (aSubCat?.tags || []).reduce(
+      (total, tag) => total + getTagUsageCount(tag),
+      0
+    );
+
+    const bUsage = (bSubCat?.tags || []).reduce(
+      (total, tag) => total + getTagUsageCount(tag),
+      0
+    );
+
+    // 兩個都是系統子分類
+    if (aIsInitial && bIsInitial) {
+      // 有使用差異時，使用率高排前
+      if (bUsage !== aUsage) {
+        return bUsage - aUsage;
+      }
+
+      // 沒有使用差異 / 初始狀態，回到初始順序
+      return aInitialIndex - bInitialIndex;
+    }
+
+    // 系統子分類排在自訂子分類前
+    if (aIsInitial && !bIsInitial) return -1;
+    if (!aIsInitial && bIsInitial) return 1;
+
+    // 兩個都是自訂子分類：使用率高排前
+    if (bUsage !== aUsage) {
+      return bUsage - aUsage;
+    }
+
+    // 使用率相同，用 key 固定排序，避免每次跳
+    return String(a).localeCompare(String(b));
+  });
+};
+// 用途：計算分類使用次數，等於該分類底下所有標籤在菜式中出現次數總和
+const getCategoryUsageCount = (category) => {
+  const tags = getAllTagsInCategory(category);
+
+  return tags.reduce((total, tag) => {
+    return total + getTagUsageCount(tag);
+  }, 0);
+};
+
+// 用途：判斷是否系統預設分類
+const isInitialCategoryKey = (catKey) => {
+  return !!INITIAL_TAG_CATEGORIES[catKey];
+};
+
+// 用途：取得系統預設分類的固定順序
+const getInitialCategoryIndex = (catKey) => {
+  return Object.keys(INITIAL_TAG_CATEGORIES).indexOf(catKey);
+};
+
+// 用途：穩定排序分類
+// 1. 系統預設分類永遠固定在前，按 INITIAL_TAG_CATEGORIES 順序
+// 2. 自訂分類排在後面
+// 3. 自訂分類按使用次數由多至少
+// 4. 使用次數相同時，用 key 排序，確保每個人看到一樣
+const getSortedCategoryKeys = () => {
+  const keys = Object.keys(dynamicCategories || {});
+
+  return keys.sort((a, b) => {
+    const aIsInitial = isInitialCategoryKey(a);
+    const bIsInitial = isInitialCategoryKey(b);
+
+    if (aIsInitial && bIsInitial) {
+      return getInitialCategoryIndex(a) - getInitialCategoryIndex(b);
+    }
+
+    if (aIsInitial && !bIsInitial) return -1;
+    if (!aIsInitial && bIsInitial) return 1;
+
+    const aUsage = getCategoryUsageCount(dynamicCategories[a]);
+    const bUsage = getCategoryUsageCount(dynamicCategories[b]);
+
+    if (bUsage !== aUsage) {
+      return bUsage - aUsage;
+    }
+
+    return String(a).localeCompare(String(b));
+  });
+};
+
+// 用途：判斷某標籤是否系統預設標籤
+const isInitialTag = (tagName) => {
+  const initialTagSet = getInitialTagSet();
+  return initialTagSet.has(tagName);
+};
+
+// 用途：取得某分類內的系統預設標籤順序
+const getInitialTagIndexInCategory = (catKey, subKey, tagName) => {
+  const initialCat = INITIAL_TAG_CATEGORIES[catKey];
+
+  if (!initialCat) return -1;
+
+  if (initialCat.isNested) {
+    const initialSubCat = initialCat.subCategories?.[subKey];
+    const tags = initialSubCat?.tags || [];
+    return tags.indexOf(tagName);
+  }
+
+  const tags = initialCat.tags || [];
+  return tags.indexOf(tagName);
+};
+
+// 用途：穩定排序標籤
+// 1. 系統預設標籤固定在前，按 INITIAL_TAG_CATEGORIES 原本順序
+// 2. 自訂標籤排在後面
+// 3. 自訂標籤按使用次數由多至少
+// 4. 使用次數相同時，用文字排序，確保每個人看到一樣
+const getSortedTags = (tags, catKey, subKey = null) => {
+  const safeTags = Array.isArray(tags) ? tags : [];
+
+  return [...safeTags].sort((a, b) => {
+    const aIsInitial = isInitialTag(a);
+    const bIsInitial = isInitialTag(b);
+
+    if (aIsInitial && bIsInitial) {
+      const aIndex = getInitialTagIndexInCategory(catKey, subKey, a);
+      const bIndex = getInitialTagIndexInCategory(catKey, subKey, b);
+
+      if (aIndex !== -1 && bIndex !== -1) {
+        return aIndex - bIndex;
+      }
+
+      return String(a).localeCompare(String(b));
+    }
+
+    if (aIsInitial && !bIsInitial) return -1;
+    if (!aIsInitial && bIsInitial) return 1;
+
+    const aUsage = getTagUsageCount(a);
+    const bUsage = getTagUsageCount(b);
+
+    if (bUsage !== aUsage) {
+      return bUsage - aUsage;
+    }
+
+    return String(a).localeCompare(String(b));
+  });
+};
+
+// 用途：從 Firebase 讀取目前群組相關的點菜要求
+const loadRequestsFromFirebase = async () => {
+  try {
+    if (!groupInviteCode || !email) {
+      setRequests([]);
+      return;
+    }
+
+    const allRequests = await db
+      .collection('requests')
+      .whereArrayContains('groupMemberEmails', email);
+
+    const safeRequests = Array.isArray(allRequests) ? allRequests : [];
+
+// 用途：載入目前群組所有點菜要求，包括 rejected / completed
+// completed 要保留給月曆顯示，但不顯示在下方排餐動態
+const groupRequests = safeRequests.filter(req =>
+  req.groupCode === groupInviteCode
+);
+
+    setRequests(groupRequests);
+  } catch (error) {
+    console.log('loadRequestsFromFirebase error:', error);
+    showMessage('載入點菜要求失敗', error.message || String(error));
+  }
+};
+
+// 用途：登入、切換群組、進入主畫面後，自動載入 Firebase 點菜要求
+useEffect(() => {
+  if (appStage === 'main') {
+    loadRequestsFromFirebase();
+  }
+}, [appStage, groupInviteCode, email]);
+
+// 用途：eat 用戶送出想吃要求，寫入 Firebase requests collection
+const sendRequest = async () => {
+  try {
+    if (!selectedDish) {
+      return showMessage('已選擇的菜式不存在。');
+    }
+
+    if (!customDateInput) {
+      return showMessage( '請輸入日期');
+    }
+
+    // 餐次不再硬性預設，用戶必須選擇
+    if (!selectedMeal) {
+      return showMessage( '請選擇餐次。');
+    }
+
+ 
+    if (!targetCook || !targetCookEmail) {
+      return showMessage( '請選擇大廚。');
+    }
+
+    if (!groupInviteCode) {
+      return showMessage( '你目前未加入任何群組，不能送出點菜要求。');
+    }
+
+    const normalizedDate = normalizeDateString(customDateInput);
+
+    if (isPastDate(normalizedDate)) {
+      return showMessage('不能選擇過去的日子，請望向未來。');
+    }
+
+    const isRequestToSelf =
+      targetCookEmail &&
+      email &&
+      targetCookEmail === email;
+
+    // 用途：防止同一個人向同一個 cook 重複送出同一菜式 / 同一日 / 同一餐次
+    // 注意：這裡仍然包含 senderEmail 和 targetCookEmail
+    // 因為 A、B、C 不同人都可以點同一道菜，只是畫面會合併顯示
+    const duplicateRequest = (requests || []).find(req =>
+      req.groupCode === groupInviteCode &&
+      (req.dishId || req.dishName) === (selectedDish.id || selectedDish.name) &&
+      req.date === normalizedDate &&
+      req.meal === selectedMeal &&
+      req.senderEmail === email &&
+      req.targetCookEmail === targetCookEmail &&
+      req.status !== 'rejected'
+    );
+
+    if (duplicateRequest) {
+      return showMessage(
+         '你已經送過相同的點菜要求囉。'
+      );
+    }
+
+    // 用途：建立這個 request 可讀取的群組成員 email 名單
+    const groupMemberEmails = (groupMembers || [])
+      .map(member => member.email)
+      .filter(Boolean);
+
+    if (email && !groupMemberEmails.includes(email)) {
+      groupMemberEmails.push(email);
+    }
+
+    if (targetCookEmail && !groupMemberEmails.includes(targetCookEmail)) {
+      groupMemberEmails.push(targetCookEmail);
+    }
+
+    const requestData = {
+      dishId: selectedDish.id || '',
+      dishName: selectedDish.name || '',
+      ingredients: selectedDish.ingredients || '',
+
+      groupCode: groupInviteCode || '',
+      familyGroupName: familyGroupName || '',
+
+      // 權限相關欄位
+      groupMemberEmails: groupMemberEmails,
+      groupAdminEmails: Array.isArray(groupAdminEmails) ? groupAdminEmails : [],
+
+      // 發起人
+      senderEmail: email || '',
+      senderNickname: nickname || '',
+
+      // 指定大廚
+      targetCookEmail: targetCookEmail || '',
+      targetCookName: targetCook || '',
+
+      date: normalizedDate,
+      meal: selectedMeal || '',
+
+      // 自己送給自己：直接 approved
+      // 送給其他人：pending，等對方同意
+      status: isRequestToSelf ? 'approved' : 'pending',
+
+      // 發起人選擇是否加入自己的購物清單
+      autoAddToList: autoAddToList === true,
+
+      // 大廚審核相關欄位，先預留
+     cookApprovedAddToList: false,
+cookMessage: '',
+rejectionReason: '',
+rescheduleReason: '',
+
+// 用途：記錄哪些發起人已讀過大廚通知
+cookMessageReadByEmails: [],
+
+      createdAt: new Date(),
+      updatedAt: new Date(),
+
+      approvedAt: isRequestToSelf ? new Date() : '',
+      approvedByEmail: isRequestToSelf ? email : '',
+      approvedByNickname: isRequestToSelf ? nickname : '',
+
+      rejectedAt: '',
+      rejectedByEmail: '',
+      rejectedByNickname: '',
+
+      rescheduledAt: '',
+      rescheduledByEmail: '',
+      rescheduledByNickname: ''
+    };
+
+    await db.collection('requests').add(requestData);
+
+    // 記住今次選項，下次打開「提出想吃」時沿用
+    setLastSelectedMeal(selectedMeal);
+    setLastAutoAddToList(autoAddToList === true);
+
+    // 發起人自己選擇加入購物清單
+   if (autoAddToList === true) {
+  addToShoppingList(selectedDish.ingredients);
+}
+
+    await loadRequestsFromFirebase();
+
+    setRequestModalVisible(false);
+
+    showMessage(
+      isRequestToSelf
+        ? '已把餐點排入月曆。'
+        : `已向 ${targetCook} 送出想吃通知！`
+    );
+  } catch (error) {
+    console.log('sendRequest error:', error);
+    showMessage('送出點菜要求失敗', error.message || String(error));
+  }
+};
+
+
+// 用途：cook 同意點菜要求；如果畫面合併了多個相同 request，就一次全部同意
+// 同意時可選擇是否把材料加入購物清單
+// 注意：approveAddToList === true 才加入；false / null 都當作不加入
+const handleApproveRequest = async (idOrIds) => {
+  try {
+    const ids = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
+
+    const targetRequests = (requests || []).filter(req =>
+      ids.includes(req.id)
+    );
+
+    if (targetRequests.length === 0) {
+      return showMessage('找不到這個點菜要求。');
+    }
+
+    for (const targetReq of targetRequests) {
+      await db.collection('requests').update(targetReq.id, {
+        dishId: targetReq.dishId || '',
+        dishName: targetReq.dishName || '',
+        ingredients: targetReq.ingredients || '',
+
+        groupCode: targetReq.groupCode || groupInviteCode || '',
+        familyGroupName: targetReq.familyGroupName || familyGroupName || '',
+
+        // 重要：保留權限欄位，避免之後讀取 / 改期 / 同意再被 rules 擋
+        groupMemberEmails:
+          Array.isArray(targetReq.groupMemberEmails) && targetReq.groupMemberEmails.length > 0
+            ? targetReq.groupMemberEmails
+            : getCurrentGroupMemberEmails(),
+
+        groupAdminEmails:
+          Array.isArray(targetReq.groupAdminEmails) && targetReq.groupAdminEmails.length > 0
+            ? targetReq.groupAdminEmails
+            : (Array.isArray(groupAdminEmails) ? groupAdminEmails : []),
+
+        senderEmail: targetReq.senderEmail || '',
+        senderNickname: targetReq.senderNickname || targetReq.sender || '',
+
+        targetCookEmail: targetReq.targetCookEmail || '',
+        targetCookName: targetReq.targetCookName || targetReq.target || '',
+
+        date: targetReq.date || '',
+        meal: targetReq.meal || '晚餐',
+
+        status: 'approved',
+
+        autoAddToList: targetReq.autoAddToList || false,
+
+        // 大廚是否把材料加入自己的購物清單
+        // true 才加入；false / null 都當作不加入
+        cookApprovedAddToList: approveAddToList === true,
+
+        cookMessage: targetReq.cookMessage || '',
+        rejectionReason: '',
+        rescheduleReason: targetReq.rescheduleReason || '',
+
+        createdAt: targetReq.createdAt || new Date(),
+        updatedAt: new Date(),
+
+        approvedAt: new Date(),
+        approvedByEmail: email || '',
+        approvedByNickname: nickname || '',
+
+        rejectedAt: '',
+        rejectedByEmail: '',
+        rejectedByNickname: '',
+
+        rescheduledAt: targetReq.rescheduledAt || '',
+        rescheduledByEmail: targetReq.rescheduledByEmail || '',
+        rescheduledByNickname: targetReq.rescheduledByNickname || ''
+      });
+    }
+
+    // 大廚選擇加入購物清單時，只加一次材料，避免合併 request 重複加
+    if (approveAddToList === true && targetRequests[0]?.ingredients) {
+      addToShoppingList(targetRequests[0].ingredients);
+    }
+
+    // 記住大廚今次選項，下次打開審核視窗時沿用
+    setLastApproveAddToList(approveAddToList === true);
+
+    // 用途：判斷同意後，自己還有沒有其他 pending request 要處理
+const remainingIncomingRequests = (incomingRequests || []).filter(req =>
+  !ids.includes(req.id)
+);
+
+await loadRequestsFromFirebase();
+
+if (remainingIncomingRequests.length === 0) {
+  setRequestInboxVisible(false);
+} else {
+  setRequestInboxVisible(true);
+}
+
+showMessage('已同意該點菜要求。');
+  } catch (error) {
+    console.log('handleApproveRequest error:', error);
+    showMessage('同意點菜要求失敗', error.message || String(error));
+  }
+};
+// 用途：打開拒絕 / 取消點菜要求視窗
+// 大廚可以額外寫訊息給發起人，也可以留空只傳官方通知
+const openRejectModal = (req) => {
+  setRejectTargetRequest(req);
+  setRejectReasonInput('');
+  setRejectModalVisible(true);
+};
+// 用途：確認拒絕 / 取消 request，可填訊息，可留空
+const handleConfirmRejectRequest = async () => {
+  try {
+    if (!rejectTargetRequest) {
+      return showMessage('此點菜要求不存在。');
+    }
+
+    const reason = rejectReasonInput.trim();
+
+    await handleRejectRequest(rejectTargetRequest, reason);
+
+    setRejectModalVisible(false);
+    setRejectTargetRequest(null);
+    setRejectReasonInput('');
+  } catch (error) {
+    console.log('handleConfirmRejectRequest error:', error);
+    showMessage('拒絕失敗', error.message || String(error));
+  }
+};
+// 用途：cook 拒絕 / 取消點菜要求；如果畫面合併了多個相同 request，就一次全部拒絕
+// reason 可以空白；如果空白，就寫入 official 通知
+const handleRejectRequest = async (reqItem, reason = '') => {
+  try {
+    const ids = Array.isArray(reqItem?.mergedRequestIds)
+      ? reqItem.mergedRequestIds
+      : [reqItem?.id];
+
+    const targetRequests = (requests || []).filter(req =>
+      ids.includes(req.id)
+    );
+
+    if (targetRequests.length === 0) {
+      return showMessage('此點菜要求不存在。');
+    }
+
+const cookDisplayName = nickname || email || '大廚';
+
+const officialNotice = `${cookDisplayName}已拒絕此點菜要求。`;
+
+const finalMessage = reason
+  ? `${officialNotice}\n${cookDisplayName}留言：${reason}`
+  : officialNotice;
+
+    for (const targetReq of targetRequests) {
+      await db.collection('requests').update(targetReq.id, {
+        dishId: targetReq.dishId || '',
+        dishName: targetReq.dishName || '',
+        ingredients: targetReq.ingredients || '',
+
+        groupCode: targetReq.groupCode || groupInviteCode || '',
+        familyGroupName: targetReq.familyGroupName || familyGroupName || '',
+
+        groupMemberEmails:
+          Array.isArray(targetReq.groupMemberEmails) && targetReq.groupMemberEmails.length > 0
+            ? targetReq.groupMemberEmails
+            : getCurrentGroupMemberEmails(),
+
+        groupAdminEmails:
+          Array.isArray(targetReq.groupAdminEmails) && targetReq.groupAdminEmails.length > 0
+            ? targetReq.groupAdminEmails
+            : (Array.isArray(groupAdminEmails) ? groupAdminEmails : []),
+
+        senderEmail: targetReq.senderEmail || '',
+        senderNickname: targetReq.senderNickname || targetReq.sender || '',
+
+        targetCookEmail: targetReq.targetCookEmail || '',
+        targetCookName: targetReq.targetCookName || targetReq.target || '',
+
+        date: targetReq.date || '',
+        meal: targetReq.meal || '晚餐',
+
+        status: 'rejected',
+
+        autoAddToList: targetReq.autoAddToList || false,
+        cookApprovedAddToList: targetReq.cookApprovedAddToList || false,
+
+rejectionReason: reason,
+cookMessage: finalMessage,
+
+// 新通知產生後，先把「操作的大廚自己」標記為已讀
+// 這樣如果大廚同時也是發起人，就不會收到自己發出的通知
+cookMessageReadByEmails: email ? [email] : [],
+
+        // 如果之前有改期原因，保留記錄
+        rescheduleReason: targetReq.rescheduleReason || '',
+
+        createdAt: targetReq.createdAt || new Date(),
+        updatedAt: new Date(),
+
+        approvedAt: targetReq.approvedAt || '',
+        approvedByEmail: targetReq.approvedByEmail || '',
+        approvedByNickname: targetReq.approvedByNickname || '',
+
+        rejectedAt: new Date(),
+        rejectedByEmail: email || '',
+        rejectedByNickname: nickname || '',
+
+        rescheduledAt: targetReq.rescheduledAt || '',
+        rescheduledByEmail: targetReq.rescheduledByEmail || '',
+        rescheduledByNickname: targetReq.rescheduledByNickname || ''
+      });
+    }
+
+    const remainingIncomingRequests = (incomingRequests || []).filter(req =>
+      !ids.includes(req.id)
+    );
+
+    await loadRequestsFromFirebase();
+
+    if (remainingIncomingRequests.length === 0) {
+      setRequestInboxVisible(false);
+    } else {
+      setRequestInboxVisible(true);
+    }
+
+  } catch (error) {
+    console.log('handleRejectRequest error:', error);
+    showMessage('拒絕點菜要求失敗', error.message || String(error));
+  }
+};
+
+// 用途：大廚標記排餐已完成，完成後從排餐動態和月曆中隱藏
+const handleCompleteRequest = async (idOrIds) => {
+  try {
+    const ids = Array.isArray(idOrIds) ? idOrIds : [idOrIds];
+
+    const targetRequests = (requests || []).filter(req =>
+      ids.includes(req.id)
+    );
+
+    if (targetRequests.length === 0) {
+      return showMessage('完成的排餐不存在。');
+    }
+
+    for (const targetReq of targetRequests) {
+      await db.collection('requests').update(targetReq.id, {
+        dishId: targetReq.dishId || '',
+        dishName: targetReq.dishName || '',
+        ingredients: targetReq.ingredients || '',
+
+        groupCode: targetReq.groupCode || groupInviteCode || '',
+        familyGroupName: targetReq.familyGroupName || familyGroupName || '',
+
+        groupMemberEmails:
+          Array.isArray(targetReq.groupMemberEmails) && targetReq.groupMemberEmails.length > 0
+            ? targetReq.groupMemberEmails
+            : getCurrentGroupMemberEmails(),
+
+        groupAdminEmails:
+          Array.isArray(targetReq.groupAdminEmails) && targetReq.groupAdminEmails.length > 0
+            ? targetReq.groupAdminEmails
+            : (Array.isArray(groupAdminEmails) ? groupAdminEmails : []),
+
+        senderEmail: targetReq.senderEmail || '',
+        senderNickname: targetReq.senderNickname || targetReq.sender || '',
+
+        targetCookEmail: targetReq.targetCookEmail || '',
+        targetCookName: targetReq.targetCookName || targetReq.target || '',
+
+        date: targetReq.date || '',
+        meal: targetReq.meal || '晚餐',
+
+        // 重要：標記已完成
+        status: 'completed',
+
+        autoAddToList: targetReq.autoAddToList || false,
+        cookApprovedAddToList: targetReq.cookApprovedAddToList || false,
+
+        // 保留大廚之前給發起人的訊息
+        cookMessage: targetReq.cookMessage || '',
+        rejectionReason: targetReq.rejectionReason || '',
+        rescheduleReason: targetReq.rescheduleReason || '',
+
+        createdAt: targetReq.createdAt || new Date(),
+        updatedAt: new Date(),
+
+        approvedAt: targetReq.approvedAt || '',
+        approvedByEmail: targetReq.approvedByEmail || '',
+        approvedByNickname: targetReq.approvedByNickname || '',
+
+        rejectedAt: targetReq.rejectedAt || '',
+        rejectedByEmail: targetReq.rejectedByEmail || '',
+        rejectedByNickname: targetReq.rejectedByNickname || '',
+
+        rescheduledAt: targetReq.rescheduledAt || '',
+        rescheduledByEmail: targetReq.rescheduledByEmail || '',
+        rescheduledByNickname: targetReq.rescheduledByNickname || '',
+
+        completedAt: new Date(),
+        completedByEmail: email || '',
+        completedByNickname: nickname || ''
+      });
+    }
+
+    await loadRequestsFromFirebase();
+
+  } catch (error) {
+    console.log('handleCompleteRequest error:', error);
+    showMessage('標記完成失敗', error.message || String(error));
+  }
+};
+
+// 用途：取得目前群組所有成員 email，修復舊 request 權限欄位用
+const getCurrentGroupMemberEmails = () => {
+  const emails = (groupMembers || [])
+    .map(member => member.email)
+    .filter(Boolean);
+
+  if (email && !emails.includes(email)) {
+    emails.push(email);
+  }
+
+  if (targetCookEmail && !emails.includes(targetCookEmail)) {
+    emails.push(targetCookEmail);
+  }
+
+  return emails;
+};
+
+// 用途：打開改期視窗；如果是合併 request，就一次改全部
+// 日期和餐次都預設用原本 request 的資料，但可以修改
+const openRescheduleModal = (req) => {
+  if (rescheduleModalVisible) return;
+
+  setRescheduleTargetId(req.mergedRequestIds || [req.id]);
+  setRescheduleDateInput(req.date || '');
+
+  // 預設餐次 = 改期前原本餐次
+  setRescheduleMealInput(req.meal || '');
+
+  // 一開始只顯示目前餐次，不展開所有選項
+  setRescheduleMealOptionsVisible(false);
+
+  setRescheduleReasonInput('');
+  setIsRescheduleSubmitting(false);
+  setRescheduleModalVisible(true);
+};
+
+
+// 用途：cook 改期，並將合併的點菜要求全部維持為 approved
+// 日期和餐次都可以修改；訊息可以留空
+const handleConfirmReschedule = async () => {
+  try {
+    if (isRescheduleSubmitting) return;
+
+    const normalizedDate = normalizeDateString(rescheduleDateInput);
+const reason = rescheduleReasonInput.trim();
+
+if (!rescheduleDateInput) {
+  return showMessage('請輸入新日期。');
+}
+
+if (isPastDate(normalizedDate)) {
+  return showMessage('不能改到已過去的日子。');
+}
+
+    const ids = Array.isArray(rescheduleTargetId)
+      ? rescheduleTargetId
+      : [rescheduleTargetId];
+
+    const targetRequests = (requests || []).filter(req =>
+      ids.includes(req.id)
+    );
+
+    if (targetRequests.length === 0) {
+      return showMessage('改期的點菜要求不存在。');
+    }
+
+    // 用途：改期時可同步修改餐次
+    // 如果沒有手動改，就沿用原本 request 的餐次
+    const newMeal = rescheduleMealInput || targetRequests[0]?.meal || '';
+
+    if (!newMeal) {
+      return showMessage('請選擇改期後的餐次。');
+    }
+
+    setIsRescheduleSubmitting(true);
+
+    const cookDisplayName =
+      nickname ||
+      email ||
+      '大廚';
+
+    // 如果你不想通知裡顯示餐次，可以把「（${newMeal}）」刪走
+    const officialNotice =
+      `${cookDisplayName}已將點菜安排改期至 ${normalizedDate}（${newMeal}）。`;
+
+    const finalMessage = reason
+      ? `${officialNotice}\n${cookDisplayName}留言：${reason}`
+      : officialNotice;
+
+    for (const targetReq of targetRequests) {
+      await db.collection('requests').update(targetReq.id, {
+        dishId: targetReq.dishId || '',
+        dishName: targetReq.dishName || '',
+        ingredients: targetReq.ingredients || '',
+
+        groupCode: targetReq.groupCode || groupInviteCode || '',
+        familyGroupName: targetReq.familyGroupName || familyGroupName || '',
+
+        groupMemberEmails:
+          Array.isArray(targetReq.groupMemberEmails) && targetReq.groupMemberEmails.length > 0
+            ? targetReq.groupMemberEmails
+            : getCurrentGroupMemberEmails(),
+
+        groupAdminEmails:
+          Array.isArray(targetReq.groupAdminEmails) && targetReq.groupAdminEmails.length > 0
+            ? targetReq.groupAdminEmails
+            : (Array.isArray(groupAdminEmails) ? groupAdminEmails : []),
+
+        senderEmail: targetReq.senderEmail || '',
+        senderNickname: targetReq.senderNickname || targetReq.sender || '',
+
+        targetCookEmail: targetReq.targetCookEmail || '',
+        targetCookName: targetReq.targetCookName || targetReq.target || '',
+
+        date: normalizedDate,
+        meal: newMeal,
+
+        status: 'approved',
+
+        autoAddToList: targetReq.autoAddToList || false,
+        cookApprovedAddToList: targetReq.cookApprovedAddToList || false,
+
+        // 給發起人 / 其他大廚看的通知內容
+        rescheduleReason: reason,
+        cookMessage: finalMessage,
+
+// 新通知產生後，先把「操作的大廚自己」標記為已讀
+// 這樣如果大廚同時也是發起人，就不會收到自己發出的通知
+cookMessageReadByEmails: email ? [email] : [],
+
+        rejectionReason: '',
+
+        createdAt: targetReq.createdAt || new Date(),
+        updatedAt: new Date(),
+
+        approvedAt: targetReq.approvedAt || new Date(),
+        approvedByEmail: targetReq.approvedByEmail || email || '',
+        approvedByNickname: targetReq.approvedByNickname || nickname || '',
+
+        rejectedAt: '',
+        rejectedByEmail: '',
+        rejectedByNickname: '',
+
+        rescheduledAt: new Date(),
+        rescheduledByEmail: email || '',
+        rescheduledByNickname: nickname || ''
+      });
+    }
+
+    await loadRequestsFromFirebase();
+
+setRescheduleModalVisible(false);
+setRescheduleTargetId(null);
+setRescheduleDateInput('');
+setRescheduleMealInput('');
+setRescheduleMealOptionsVisible(false);
+setRescheduleReasonInput('');
+setIsRescheduleSubmitting(false);
+
+    const remainingIncomingRequests = (incomingRequests || []).filter(req =>
+      !ids.includes(req.id)
+    );
+
+    if (remainingIncomingRequests.length === 0) {
+      setRequestInboxVisible(false);
+    } else {
+      setRequestInboxVisible(true);
+    }
+
+  } catch (error) {
+    console.log('handleConfirmReschedule error:', error);
+    setIsRescheduleSubmitting(false);
+    showMessage('改期失敗', error.message || String(error));
+  }
+};
+
+//加菜式
+  const [newDishName, setNewDishName] = useState('');
+  const [newDishIngredients, setNewDishIngredients] = useState('');
+  const [addPageSelectedTags, setAddPageSelectedTags] = useState([]);
+  const [isPublic, setIsPublic] = useState(false);
+  
+const recommendedDishes = useMemo(() => {
+  if (!newDishName.trim()) return [];
+  return dishes.filter(d => d.name.includes(newDishName.trim()));
+}, [newDishName, dishes]);
+
+
+
+  const [shoppingList, setShoppingList] = useState([]);
+  const [manualIngredientInput, setManualIngredientInput] = useState('');
+
+
+// 1. === 升級版：自動匹配分類與標籤圖示的輔助邏輯 ===
+  const matchCategoryEmoji = (name, isTag = false) => {
+    const emojiRegex = /[\u{1F300}-\u{1F9FF}]/u;
+    if (emojiRegex.test(name)) return name;
+
+
+    const n = name.toLowerCase();
+
+
+    if (isTag) {
+      if (n.includes('豬')) return `🐷 ${name}`;
+      if (n.includes('牛')) return `🥩 ${name}`;
+      if (n.includes('雞') || n.includes('鳥')) return `🐔 ${name}`;
+      if (n.includes('鴨') || n.includes('鵝')) return `🦆 ${name}`;
+      if (n.includes('魚')) return `🐟 ${name}`;
+      if (n.includes('蝦')) return `🦐 ${name}`;
+      if (n.includes('蟹')) return `🦀 ${name}`;
+      if (n.includes('蛤') || n.includes('貝') || n.includes('蚵') || n.includes('蜆')) return `🦪 ${name}`;
+      if (n.includes('透抽') || n.includes('花枝') || n.includes('軟絲') || n.includes('小卷') || n.includes('魷魚')) return `🦑 ${name}`;
+      if (n.includes('蛋')) return `🥚 ${name}`;
+      if (n.includes('豆腐') || n.includes('豆干') || n.includes('腐皮')) return `🧀 ${name}`;
+      if (n.includes('菜') || n.includes('筍') || n.includes('蘿蔔')) return `🥬 ${name}`;
+      if (n.includes('菇') || n.includes('蕈') || n.includes('木耳')) return `🍄 ${name}`;
+      if (n.includes('豆')) return `🫘 ${name}`;
+      if (n.includes('瓜') || n.includes('茄') || n.includes('椒')) return `🌽 ${name}`;
+      if (n.includes('飯') || n.includes('米')) return `🍚 ${name}`;
+      if (n.includes('麵') || n.includes('粉') || n.includes('烏龍')) return `🍜 ${name}`;
+      if (n.includes('餃') || n.includes('包') || n.includes('燒賣')) return `🥟 ${name}`;
+      if (n.includes('麵包') || n.includes('吐司') || n.includes('烘焙')) return `🍞 ${name}`;
+     
+      const randomTagEmojis = ['✨', '🍽️', '🍳', '🍯', '🧂', '🥢', '🍙', '🌯'];
+      const randomIndex = Math.abs(name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)) % randomTagEmojis.length;
+      return `${randomTagEmojis[randomIndex]} ${name}`;
+    }
+
+
+    if (n.includes('台') || n.includes('夜市') || n.includes('小吃')) return `🏮 ${name}`;
+    if (n.includes('日') || n.includes('壽司') || n.includes('居酒屋')) return `🍣 ${name}`;
+    if (n.includes('港') || n.includes('點心') || n.includes('飲茶')) return `🥢 ${name}`;
+    if (n.includes('韓') || n.includes('泡菜') || n.includes('烤肉')) return `🇰🇷 ${name}`;
+    if (n.includes('泰') || n.includes('東南亞') || n.includes('越')) return `🇹🇭 ${name}`;
+    if (n.includes('西') || n.includes('歐') || n.includes('義') || n.includes('法')) return `🇮🇹 ${name}`;
+    if (n.includes('美') || n.includes('漢堡') || n.includes('炸雞')) return `🇺🇸 ${name}`;
+    if (n.includes('川') || n.includes('辣') || n.includes('麻辣')) return `🌶️ ${name}`;
+    if (n.includes('甜') || n.includes('蛋糕') || n.includes('點心') || n.includes('下午茶')) return `🍰 ${name}`;
+    if (n.includes('健康') || n.includes('素') || n.includes('蔬') || n.includes('減脂') || n.includes('生酮')) return `🌱 ${name}`;
+    if (n.includes('湯') || n.includes('羹') || n.includes('燉品')) return `🥣 ${name}`;
+    if (n.includes('飲') || n.includes('茶') || n.includes('咖啡') || n.includes('微醺')) return `🥤 ${name}`;
+    if (n.includes('宵夜') || n.includes('炸物') || n.includes('烤串')) return `🍢 ${name}`;
+    if (n.includes('早午餐') || n.includes('早餐')) return `🍳 ${name}`;
+   
+    const randomCatEmojis = ['📁', '📂', '🗂️', '🗃️', '📋', '🔖'];
+    const randomIndex = Math.abs(name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)) % randomCatEmojis.length;
+    return `${randomCatEmojis[randomIndex]} ${name}`;
+  };
+
+// 用途：從 INITIAL_TAG_CATEGORIES 找出所有系統預設標籤
+const getInitialTagSet = () => {
+  const tagSet = new Set();
+
+  Object.keys(INITIAL_TAG_CATEGORIES).forEach(catKey => {
+    const cat = INITIAL_TAG_CATEGORIES[catKey];
+
+    if (cat.isNested) {
+      Object.keys(cat.subCategories || {}).forEach(subKey => {
+        const tags = cat.subCategories[subKey].tags || [];
+        tags.forEach(tag => tagSet.add(tag));
+      });
+    } else {
+      const tags = cat.tags || [];
+      tags.forEach(tag => tagSet.add(tag));
+    }
+  });
+
+  return tagSet;
+};
+
+// 用途：取得某個分類底下所有標籤
+const getTagsFromCategory = (cat) => {
+  let result = [];
+
+  if (!cat) return result;
+
+  if (cat.isNested) {
+    Object.keys(cat.subCategories || {}).forEach(subKey => {
+      const subCat = cat.subCategories[subKey];
+      result = [...result, ...(subCat.tags || [])];
+    });
+  } else {
+    result = [...(cat.tags || [])];
+  }
+
+  return result;
+};
+
+// 用途：取得目前 dynamicCategories 入面所有「後加」的自訂標籤
+const getCustomAddedTags = () => {
+  const initialTagSet = getInitialTagSet();
+  const result = [];
+
+  Object.keys(dynamicCategories || {}).forEach(catKey => {
+    const cat = dynamicCategories[catKey];
+
+    if (cat.isNested) {
+      Object.keys(cat.subCategories || {}).forEach(subKey => {
+        const subCat = cat.subCategories[subKey];
+        const tags = subCat.tags || [];
+
+        tags.forEach(tag => {
+          if (!initialTagSet.has(tag)) {
+            result.push({
+              tag,
+              catKey,
+              subKey,
+              categoryTitle: cat.title,
+              subCategoryTitle: subCat.title
+            });
+          }
+        });
+      });
+    } else {
+      const tags = cat.tags || [];
+
+      tags.forEach(tag => {
+        if (!initialTagSet.has(tag)) {
+          result.push({
+            tag,
+            catKey,
+            subKey: null,
+            categoryTitle: cat.title,
+            subCategoryTitle: ''
+          });
+        }
+      });
+    }
+  });
+
+  return result;
+};
+
+// 用途：取得所有後加的自訂分類
+// 規則：INITIAL_TAG_CATEGORIES 原本沒有的分類 key，就視為自訂分類
+const getCustomAddedCategories = () => {
+  return Object.keys(dynamicCategories || {})
+    .filter(catKey => !INITIAL_TAG_CATEGORIES[catKey])
+    .map(catKey => {
+      const cat = dynamicCategories[catKey];
+
+      return {
+        catKey,
+        title: cat.title,
+        tagCount: getTagsFromCategory(cat).length
+      };
+    });
+};
+
+// 用途：勾選 / 取消勾選自訂標籤
+const toggleCustomTagSelection = (tag) => {
+  setSelectedCustomTagNames(prev =>
+    prev.includes(tag)
+      ? prev.filter(item => item !== tag)
+      : [...prev, tag]
+  );
+};
+
+// 用途：勾選 / 取消勾選自訂分類
+const toggleCustomCategorySelection = (catKey) => {
+  setSelectedCustomCategoryKeys(prev =>
+    prev.includes(catKey)
+      ? prev.filter(item => item !== catKey)
+      : [...prev, catKey]
+  );
+};
+
+// 用途：一次刪除多個自訂標籤 / 自訂分類，並同步到 Firebase
+const handleDeleteSelectedCustomItems = async () => {
+  const tagsToDelete = selectedCustomTagNames;
+  const categoriesToDelete = selectedCustomCategoryKeys;
+
+  if (tagsToDelete.length === 0 && categoriesToDelete.length === 0) {
+    return showMessage('請先選擇自訂分類或標籤。');
+  }
+
+  let tagsInsideDeletedCategories = [];
+
+  categoriesToDelete.forEach(catKey => {
+    const cat = dynamicCategories[catKey];
+    tagsInsideDeletedCategories = [
+      ...tagsInsideDeletedCategories,
+      ...getTagsFromCategory(cat)
+    ];
+  });
+
+  const allTagsToRemove = Array.from(
+    new Set([...tagsToDelete, ...tagsInsideDeletedCategories])
+  );
+
+  const updated = { ...dynamicCategories };
+
+  // 1. 刪除整個自訂分類
+  categoriesToDelete.forEach(catKey => {
+    delete updated[catKey];
+  });
+
+  // 2. 從剩餘分類中刪除已選自訂標籤
+  Object.keys(updated).forEach(catKey => {
+    const cat = updated[catKey];
+
+    if (cat.isNested) {
+      const newSubCategories = { ...cat.subCategories };
+
+      Object.keys(newSubCategories).forEach(subKey => {
+        const subCat = newSubCategories[subKey];
+
+        newSubCategories[subKey] = {
+          ...subCat,
+          tags: (subCat.tags || []).filter(tag => !tagsToDelete.includes(tag))
+        };
+      });
+
+      updated[catKey] = {
+        ...cat,
+        subCategories: newSubCategories
+      };
+    } else {
+      updated[catKey] = {
+        ...cat,
+        tags: (cat.tags || []).filter(tag => !tagsToDelete.includes(tag))
+      };
+    }
+  });
+
+  // 如果刪除的是目前正在選擇的分類，要清空選擇
+  if (categoriesToDelete.includes(selectedModalCat)) {
+    setSelectedModalCat('none');
+    setSelectedSubModalCat('');
+  }
+
+  // 同步移除首頁已選標籤
+  setSelectedTags(prev =>
+    Array.isArray(prev)
+      ? prev.filter(tag => !allTagsToRemove.includes(tag))
+      : []
+  );
+
+  // 同步移除新增菜式頁已選標籤
+  setAddPageSelectedTags(prev =>
+    Array.isArray(prev)
+      ? prev.filter(tag => !allTagsToRemove.includes(tag))
+      : []
+  );
+
+  // 1. 更新本機
+  setDynamicCategories(updated);
+
+  // 2. 同步 Firebase
+  await saveTagCategoriesToFirebase(updated);
+
+  setSelectedCustomTagNames([]);
+  setSelectedCustomCategoryKeys([]);
+
+  
+};
+useEffect(() => {
+  if (appStage === 'main' && groupInviteCode) {
+    loadTagCategoriesFromFirebase();
+  }
+}, [appStage, groupInviteCode]);
+
+// 用途：刪除自訂標籤
+const handleDeleteCustomTag = (tagToDelete) => {
+  setDynamicCategories(prev => {
+    const updated = { ...prev };
+
+    Object.keys(updated).forEach(catKey => {
+      const cat = updated[catKey];
+
+      if (cat.isNested) {
+        const newSubCategories = { ...cat.subCategories };
+
+        Object.keys(newSubCategories).forEach(subKey => {
+          const subCat = newSubCategories[subKey];
+
+          newSubCategories[subKey] = {
+            ...subCat,
+            tags: (subCat.tags || []).filter(tag => tag !== tagToDelete)
+          };
+        });
+
+        updated[catKey] = {
+          ...cat,
+          subCategories: newSubCategories
+        };
+      } else {
+        updated[catKey] = {
+          ...cat,
+          tags: (cat.tags || []).filter(tag => tag !== tagToDelete)
+        };
+      }
+    });
+
+    return updated;
+  });
+
+  // 同步移除首頁已選標籤
+  setSelectedTags(prev =>
+    Array.isArray(prev) ? prev.filter(tag => tag !== tagToDelete) : []
+  );
+
+  // 同步移除新增菜式頁已選標籤
+  setAddPageSelectedTags(prev =>
+    Array.isArray(prev) ? prev.filter(tag => tag !== tagToDelete) : []
+  );
+
+};
+
+// 用途：從 Firebase 讀取目前群組共用的分類 / 標籤設定
+const loadTagCategoriesFromFirebase = async () => {
+  try {
+    if (!groupInviteCode) {
+      setDynamicCategories(INITIAL_TAG_CATEGORIES);
+      return;
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    if (!currentGroup) {
+      setDynamicCategories(INITIAL_TAG_CATEGORIES);
+      return;
+    }
+
+    if (currentGroup.tagCategories) {
+      setDynamicCategories(currentGroup.tagCategories);
+    } else {
+      setDynamicCategories(INITIAL_TAG_CATEGORIES);
+    }
+  } catch (error) {
+    console.log('loadTagCategoriesFromFirebase error:', error);
+    showMessage('載入分類標籤失敗', error.message || String(error));
+  }
+};
+
+// 用途：把分類 / 標籤設定儲存到目前群組 Firebase 文件
+const saveTagCategoriesToFirebase = async (nextCategories) => {
+  try {
+    if (!groupInviteCode) {
+      return showMessage('沒有此群組。');
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    if (!currentGroup) {
+      return showMessage('沒有此群組。');
+    }
+
+    await db.collection('familyGroups').update(currentGroup.id, {
+      groupName: currentGroup.groupName || '',
+      inviteCode: currentGroup.inviteCode || '',
+      createdByEmail: currentGroup.createdByEmail || '',
+      createdByNickname: currentGroup.createdByNickname || '',
+
+      ownerEmail: currentGroup.ownerEmail || '',
+      adminEmails: Array.isArray(currentGroup.adminEmails) ? currentGroup.adminEmails : [],
+
+      memberNames: Array.isArray(currentGroup.memberNames) ? currentGroup.memberNames : [],
+      memberEmails: Array.isArray(currentGroup.memberEmails) ? currentGroup.memberEmails : [],
+
+      // 用途：群組共用分類 / 標籤設定
+      tagCategories: nextCategories,
+
+      createdAt: currentGroup.createdAt || new Date()
+    });
+  } catch (error) {
+    console.log('saveTagCategoriesToFirebase error:', error);
+    showMessage('同步分類標籤失敗', error.message || String(error));
+  }
+};
+
+  // 用途：儲存新增分類 / 標籤，並同步到 Firebase 群組共用設定
+const handleSaveTagsAndCategories = async () => {
+  const catNameTrim = newCategoryName.trim();
+  const tagNameTrim = newModalTagName.trim();
+
+  if (!catNameTrim && !tagNameTrim) {
+    showMessage('請輸入自訂分類或標籤');
+    return;
+  }
+
+  const updated = { ...dynamicCategories };
+  let targetKey = selectedModalCat;
+
+  // 情況一：有建立新大分類
+  if (catNameTrim) {
+    targetKey = `custom_${Date.now()}`;
+
+    updated[targetKey] = {
+      title: matchCategoryEmoji(catNameTrim),
+      isNested: false,
+      tags: []
+    };
+  }
+
+  // 情況二：有建立新標籤
+  if (tagNameTrim) {
+    const finalTagName = matchCategoryEmoji(tagNameTrim, true);
+
+    if (!catNameTrim && (targetKey === 'none' || !updated[targetKey])) {
+      targetKey = 'others';
+    }
+
+    if (targetKey === 'others' && !updated.others) {
+      updated.others = {
+        title: '📁 其他',
+        isNested: false,
+        tags: []
+      };
+    }
+
+    if (updated[targetKey].isNested) {
+      const subKey =
+        selectedSubModalCat ||
+        Object.keys(updated[targetKey].subCategories || {})[0];
+
+      if (updated[targetKey].subCategories?.[subKey]) {
+        const oldTags = updated[targetKey].subCategories[subKey].tags || [];
+
+        if (!oldTags.includes(finalTagName)) {
+          updated[targetKey] = {
+            ...updated[targetKey],
+            subCategories: {
+              ...updated[targetKey].subCategories,
+              [subKey]: {
+                ...updated[targetKey].subCategories[subKey],
+                tags: [...oldTags, finalTagName]
+              }
+            }
+          };
+        }
+      }
+    } else {
+      const oldTags = updated[targetKey].tags || [];
+
+      if (!oldTags.includes(finalTagName)) {
+        updated[targetKey] = {
+          ...updated[targetKey],
+          tags: [...oldTags, finalTagName]
+        };
+      }
+    }
+  }
+
+  // 1. 先更新本機畫面
+  setDynamicCategories(updated);
+
+  // 2. 再同步到 Firebase，讓同群組成員看到一樣標籤
+  await saveTagCategoriesToFirebase(updated);
+
+  // 重置所有表單狀態
+  setNewCategoryName('');
+  setNewModalTagName('');
+  setSelectedModalCat('none');
+  setSelectedSubModalCat('');
+  setShowMoreModalCats(false);
+  setCustomModalVisible(false);
+};
+
+
+  const daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
+  const firstDayOfWeek = new Date(currentYear, currentMonth - 1, 1).getDay();
+  const blanks = Array(firstDayOfWeek).fill(null);
+  const daysArray = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+  const calendarCells = [...blanks, ...daysArray];
+
+
+  const handlePrevMonth = () => {
+    if (currentMonth === 1) { setCurrentMonth(12); setCurrentYear(currentYear - 1); }
+    else { setCurrentMonth(currentMonth - 1); }
+  };
+
+
+  const handleNextMonth = () => {
+    if (currentMonth === 12) { setCurrentMonth(1); setCurrentYear(currentYear + 1); }
+    else { setCurrentMonth(currentMonth + 1); }
+  };
+
+
+
+// 用途：從 Firebase 重新載入所有菜式資料
+const loadDishes = async () => {
+  try {
+    const allDishes = await db.collection('dishes').getAll();
+    setDishes(allDishes || []);
+    console.log('已從 Firebase 載入 dishes:', allDishes);
+  } catch (error) {
+    console.log('loadDishes error:', error);
+    showMessage('載入菜式失敗', error.message || String(error));
+  }
+};
+
+useEffect(() => {
+  if (appStage === 'main') {
+    loadDishes();
+  }
+}, [appStage]);
+
+//新菜式後台
+const availableDishes = useMemo(() => {
+  return dishes.filter(d => {
+    const status = String(
+      d.publishStatus ?? (d.isPublic ? 'approved' : 'private')
+    ).trim().toLowerCase();
+
+    const hiddenForGroups = Array.isArray(d.hiddenForGroups) ? d.hiddenForGroups : [];
+
+    // 如果此菜式已被目前群組隱藏，就任何情況都不顯示
+    if (groupInviteCode && hiddenForGroups.includes(groupInviteCode)) {
+      return false;
+    }
+
+    // 已公開：所有人、所有群組可見
+    if (status === 'approved') return true;
+
+    // 私房：只限同群組可見
+    if (status === 'private') {
+      return d.groupCode === groupInviteCode;
+    }
+
+    // 待確認：只限建立者自己可見
+    if (status === 'pending') {
+      return d.createdByEmail === email;
+    }
+
+    return false;
+  });
+}, [dishes, groupInviteCode, email]);
+
+// 用途：分頁 1 實際顯示 / 搜尋 / 標籤篩選後的菜式
+// 重要：抽籤也應該用這個結果，才會跟搜尋和標籤同步
+const displayedDishes = useMemo(() => {
+  const keyword = String(searchQuery || '').trim().toLowerCase();
+  const safeSelectedTags = Array.isArray(selectedTags) ? selectedTags : [];
+
+  return (availableDishes || []).filter(dish => {
+    const dishName = String(dish.name || '').toLowerCase();
+    const ingredients = String(dish.ingredients || '').toLowerCase();
+    const dishTags = Array.isArray(dish.tags) ? dish.tags : [];
+    const tagsText = dishTags.join(' ').toLowerCase();
+
+    const matchKeyword =
+      !keyword ||
+      dishName.includes(keyword) ||
+      ingredients.includes(keyword) ||
+      tagsText.includes(keyword);
+
+    const matchTags =
+      safeSelectedTags.length === 0 ||
+      safeSelectedTags.every(tag => dishTags.includes(tag));
+
+    return matchKeyword && matchTags;
+  });
+}, [availableDishes, searchQuery, selectedTags]);
+
+// 用途：找出目前群組已隱藏的菜式，供 admin 在編輯模式下查看和還原
+const hiddenDishesForCurrentGroup = useMemo(() => {
+  return dishes.filter(d => {
+    const hiddenForGroups = Array.isArray(d.hiddenForGroups) ? d.hiddenForGroups : [];
+    return groupInviteCode && hiddenForGroups.includes(groupInviteCode);
+  });
+}, [dishes, groupInviteCode]);
+
+// 用途：編輯模式下搜尋家庭菜餚庫的菜式
+// 注意：非編輯模式時，直接顯示原本 displayedDishes
+const editableDisplayedDishes = useMemo(() => {
+  const baseDishes = Array.isArray(displayedDishes)
+    ? displayedDishes
+    : Array.isArray(availableDishes)
+      ? availableDishes
+      : [];
+
+  const keyword = dishEditSearchQuery.trim().toLowerCase();
+
+  // 非編輯模式：不要額外過濾，直接用原本家庭菜餚庫清單
+  if (!isDishEditMode) {
+    return baseDishes;
+  }
+
+  // 編輯模式但沒有搜尋字：顯示全部可見菜式
+  if (!keyword) {
+    return baseDishes;
+  }
+
+  // 編輯模式有搜尋字：搜尋菜名、材料、標籤
+  return baseDishes.filter(dish => {
+    const name = String(dish.name || '').toLowerCase();
+    const ingredients = String(dish.ingredients || '').toLowerCase();
+    const tags = Array.isArray(dish.tags) ? dish.tags.join(' ').toLowerCase() : '';
+
+    return (
+      name.includes(keyword) ||
+      ingredients.includes(keyword) ||
+      tags.includes(keyword)
+    );
+  });
+}, [displayedDishes, availableDishes, dishEditSearchQuery, isDishEditMode]);
+
+// 用途：編輯模式下勾選 / 取消勾選要一鍵隱藏的菜式
+const toggleDishHideSelection = (dishId) => {
+  if (!dishId) return;
+
+  setSelectedDishIdsForHide(prev =>
+    prev.includes(dishId)
+      ? prev.filter(id => id !== dishId)
+      : [...prev, dishId]
+  );
+};
+
+
+// 用途：admin 在家庭菜餚庫編輯模式下，隱藏單一菜式
+// 注意：這裡是「從目前群組隱藏」，不是刪除 Firebase 菜式
+const handleAdminRemoveDishFromGroup = async (dish) => {
+  try {
+    if (!isCurrentUserAdmin) {
+      return showMessage('沒有權限管理家庭菜餚庫。');
+    }
+
+    if (!groupInviteCode) {
+      return showMessage('沒有此群組。');
+    }
+
+    if (!dish?.id) {
+      return showMessage(
+        '錯誤',
+        '沒有此菜式。'
+      );
+    }
+
+    const oldHiddenGroups = Array.isArray(dish.hiddenForGroups)
+      ? dish.hiddenForGroups
+      : [];
+
+    const updatedHiddenGroups = oldHiddenGroups.includes(groupInviteCode)
+      ? oldHiddenGroups
+      : [...oldHiddenGroups, groupInviteCode];
+
+    await db.collection('dishes').update(dish.id, {
+      name: dish.name || '',
+      ingredients: dish.ingredients || '',
+      tags: Array.isArray(dish.tags) ? dish.tags : [],
+
+      createdByEmail: dish.createdByEmail || '',
+      createdByNickname: dish.createdByNickname || '',
+
+      familyGroupName: dish.familyGroupName || '',
+      groupCode: dish.groupCode || '',
+
+      isPublic: dish.isPublic || false,
+      requestedPublic: dish.requestedPublic || false,
+      publishStatus: dish.publishStatus || (dish.isPublic ? 'approved' : 'private'),
+
+      // 保留 seed 資料，避免之後重複匯入判斷失效
+      seedKey: dish.seedKey || '',
+      seedSource: dish.seedSource || '',
+
+      // 重要：把目前群組加入隱藏名單
+      hiddenForGroups: updatedHiddenGroups,
+
+      createdAt: dish.createdAt || new Date(),
+      updatedAt: new Date()
+    });
+
+    // 更新本機 dishes，令畫面即時消失
+    setDishes(prev =>
+      prev.map(d =>
+        d.id === dish.id
+          ? { ...d, hiddenForGroups: updatedHiddenGroups }
+          : d
+      )
+    );
+
+    // 如果這道菜本來有被勾選，隱藏後順手從勾選名單移除
+    setSelectedDishIdsForHide(prev =>
+      prev.filter(id => id !== dish.id)
+    );
+  } catch (error) {
+    console.log('handleAdminRemoveDishFromGroup error:', error);
+    showMessage('操作失敗', error.message || String(error));
+  }
+};
+// 用途：判斷這道菜是否可以被目前用戶永久刪除
+// 只有「自己建立」+「屬於目前群組」+「不是 approved 公開菜式」才可永久刪除
+const canPermanentlyDeleteDishFromGroup = (dish) => {
+  if (!dish) return false;
+
+  const status = String(
+    dish.publishStatus ?? (dish.isPublic ? 'approved' : 'private')
+  ).trim().toLowerCase();
+
+  const isCreatedByMe = dish.createdByEmail === email;
+  const isFromCurrentGroup = dish.groupCode === groupInviteCode;
+
+  // approved 公開菜式不永久刪，只能從目前群組隱藏
+  const isApprovedPublic = status === 'approved' || dish.isPublic === true;
+
+  return isCreatedByMe && isFromCurrentGroup && !isApprovedPublic;
+};
+// 用途：admin 一鍵處理多個已選菜式
+// 自己新增到目前群組的私房 / 待審菜式：永久刪除
+// 公開菜式 / 別人建立的菜式：只從目前群組隱藏
+const handleAdminHideSelectedDishes = async () => {
+  try {
+    if (!isCurrentUserAdmin) {
+      return showMessage('只有管理員可以管理家庭菜餚庫。');
+    }
+
+    if (!groupInviteCode) {
+      return showMessage('沒有此群組。');
+    }
+
+    if (selectedDishIdsForHide.length === 0) {
+      return showMessage('請先勾選要處理的菜式。');
+    }
+
+    const targetDishes = (editableDisplayedDishes || []).filter(dish =>
+      selectedDishIdsForHide.includes(dish.id)
+    );
+
+    if (targetDishes.length === 0) {
+      return showMessage('已選菜式不存在。');
+    }
+
+    let deletedCount = 0;
+    let hiddenCount = 0;
+
+    const deletedDishIds = [];
+    const hiddenDishUpdates = [];
+
+    for (const dish of targetDishes) {
+      if (!dish?.id) continue;
+
+      // =========================
+      // A. 自己新增到目前群組的非公開菜式：永久刪除
+      // =========================
+      if (canPermanentlyDeleteDishFromGroup(dish)) {
+        await db.collection('dishes').delete(dish.id);
+
+        deletedDishIds.push(dish.id);
+        deletedCount += 1;
+        continue;
+      }
+
+      // =========================
+      // B. 其他菜式：只從目前群組隱藏
+      // =========================
+      const oldHiddenGroups = Array.isArray(dish.hiddenForGroups)
+        ? dish.hiddenForGroups
+        : [];
+
+      const updatedHiddenGroups = oldHiddenGroups.includes(groupInviteCode)
+        ? oldHiddenGroups
+        : [...oldHiddenGroups, groupInviteCode];
+
+      await db.collection('dishes').update(dish.id, {
+        name: dish.name || '',
+        ingredients: dish.ingredients || '',
+        tags: Array.isArray(dish.tags) ? dish.tags : [],
+
+        createdByEmail: dish.createdByEmail || '',
+        createdByNickname: dish.createdByNickname || '',
+
+        familyGroupName: dish.familyGroupName || '',
+        groupCode: dish.groupCode || '',
+
+        isPublic: dish.isPublic || false,
+        requestedPublic: dish.requestedPublic || false,
+        publishStatus: dish.publishStatus || (dish.isPublic ? 'approved' : 'private'),
+
+        seedKey: dish.seedKey || '',
+        seedSource: dish.seedSource || '',
+
+        hiddenForGroups: updatedHiddenGroups,
+
+        createdAt: dish.createdAt || new Date(),
+        updatedAt: new Date()
+      });
+
+      hiddenDishUpdates.push({
+        id: dish.id,
+        hiddenForGroups: updatedHiddenGroups
+      });
+
+      hiddenCount += 1;
+    }
+
+    // =========================
+    // 更新本機 dishes
+    // =========================
+    setDishes(prev =>
+      prev
+        // 永久刪除的菜式，直接從本機移除
+        .filter(dish => !deletedDishIds.includes(dish.id))
+        // 被隱藏的菜式，更新 hiddenForGroups
+        .map(dish => {
+          const update = hiddenDishUpdates.find(item => item.id === dish.id);
+
+          if (!update) return dish;
+
+          return {
+            ...dish,
+            hiddenForGroups: update.hiddenForGroups
+          };
+        })
+    );
+
+    setSelectedDishIdsForHide([]);
+
+  } catch (error) {
+    console.log('handleAdminHideSelectedDishes error:', error);
+    showMessage('操作失敗', error.message || String(error));
+  }
+};
+// 用途：admin 還原目前群組已隱藏的菜式
+const handleAdminRestoreHiddenDish = async (dish) => {
+  try {
+    if (!isCurrentUserAdmin) {
+      return showMessage('沒有權限還原菜式。');
+    }
+
+    if (!groupInviteCode) {
+      return showMessage('沒有此群組。');
+    }
+
+    const oldHiddenGroups = Array.isArray(dish.hiddenForGroups)
+      ? dish.hiddenForGroups
+      : [];
+
+    const updatedHiddenGroups = oldHiddenGroups.filter(code => code !== groupInviteCode);
+
+    await db.collection('dishes').update(dish.id, {
+      name: dish.name || '',
+      ingredients: dish.ingredients || '',
+      tags: dish.tags || [],
+      createdByEmail: dish.createdByEmail || '',
+      createdByNickname: dish.createdByNickname || '',
+      familyGroupName: dish.familyGroupName || '',
+      groupCode: dish.groupCode || '',
+      isPublic: dish.isPublic || false,
+      requestedPublic: dish.requestedPublic || false,
+      publishStatus: dish.publishStatus || (dish.isPublic ? 'approved' : 'private'),
+      hiddenForGroups: updatedHiddenGroups,
+      createdAt: dish.createdAt || new Date()
+    });
+
+    // 更新本機 dishes，令畫面即時還原
+    setDishes(prev =>
+      prev.map(d =>
+        d.id === dish.id
+          ? { ...d, hiddenForGroups: updatedHiddenGroups }
+          : d
+      )
+    );
+
+    return 
+      } catch (error) {
+    console.log('handleAdminRestoreHiddenDish error:', error);
+    showMessage('還原失敗', error.message || String(error));
+  }
+};
+
+
+const handleAddDish = async () => {
+  try {
+    console.log('按了確認儲存食譜');
+
+    if (!newDishName || !newDishName.trim()) {
+      return showMessage('請輸入菜名');
+    }
+
+    const finalTags =
+      addPageSelectedTags.length > 0
+        ? addPageSelectedTags
+        : ['⏱️ 快手菜'];
+
+    const dishData = {
+      name: newDishName.trim(),
+      ingredients: newDishIngredients ? newDishIngredients.trim() : '未填寫',
+      tags: finalTags,
+
+      createdByEmail: email,
+      createdByNickname: nickname || '',
+
+      familyGroupName: familyGroupName || '',
+      groupCode: groupInviteCode || '',
+
+      isPublic: false,
+      requestedPublic: isPublic,
+      publishStatus: isPublic ? 'pending' : 'private',
+      hiddenForGroups: [],
+      createdAt: new Date()
+    };
+
+    console.log('準備儲存 dishData:', dishData);
+
+    const result = await db.collection('dishes').add(dishData);
+
+    // ✅ 立即同步到本地 state，首頁即時見到
+    const localDish = {
+      id: result.name ? result.name.split('/').pop() : Date.now().toString(),
+      ...dishData
+    };
+
+    setDishes(prev => [localDish, ...prev]);
+
+ 
+    setNewDishName('');
+    setNewDishIngredients('');
+    setAddPageSelectedTags([]);
+    setIsPublic(false);
+    setCurrentTab('home');
+
+  } catch (error) {
+    console.log('handleAddDish error:', error);
+    showMessage('儲存失敗', error.message || String(error));
+  }
+};
+
+const handleCellPress = (day) => {
+  if (!day) return;
+
+  const clickedDate = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+  // 用途：找出這一天所有已確認或已完成的排餐
+  // approved = 未完成但已同意
+  // completed = 已完成
+  const mealRecords = (uniqueRequests || []).filter(r =>
+    normalizeDateString(r.date) === clickedDate &&
+    (r.status === 'approved' || r.status === 'completed')
+  );
+
+  // 如果這天有排餐紀錄，即使是過去日期，都可以查看
+  if (mealRecords.length > 0) {
+    showMessage(
+      `📅 ${clickedDate} 排餐紀錄`,
+      mealRecords
+        .map(r => {
+          const cooks = Array.isArray(r.mergedCooks)
+            ? r.mergedCooks.join('、')
+            : (r.targetCookName || r.target || '未知');
+
+          const statusText =
+            r.status === 'completed'
+              ? '✅ 已完成'
+              : '🟢 未完成';
+
+          return `• ${statusText}｜[${r.meal}] ${r.dishName} (${cooks} 掌廚)`;
+        })
+        .join('\n')
+    );
+
+    return;
+  }
+
+  // 沒有排餐紀錄，而且日期已過，才阻止
+  if (isPastDate(clickedDate)) {
+    return showMessage('已過去的日子不能再排餐或修改。');
+  }
+
+  // 未來日期且沒有排餐，才問是否去點菜
+  showConfirmMessage(
+
+    `📅 ${clickedDate} 目前尚無確認排餐！\n要現在去挑選菜餚提出建議嗎？`,
+    [
+      { text: '先不用', style: 'cancel' },
+      {
+        text: '去點菜',
+        onPress: () => {
+          setCustomDateInput(clickedDate);
+          setCurrentTab('home');
+        }
+      }
+    ]
+  );
+};
+
+const renderTagButtons = (tags, currentSelected, onToggle) => {
+  const safeTags = Array.isArray(tags) ? tags : [];
+  const safeSelected = Array.isArray(currentSelected) ? currentSelected : [];
+
+  return safeTags.map(tag => {
+    const isSelected = safeSelected.includes(tag);
+
+    return (
+      <TouchableOpacity
+        key={tag}
+        style={[styles.tagButtonBig, isSelected && styles.tagButtonSelected]}
+        onPress={() => onToggle(tag)}
+      >
+        <Text style={[styles.tagTextBig, isSelected && { color: '#fff' }]}>
+          {tag}
+        </Text>
+      </TouchableOpacity>
+    );
+  });
+};
+
+
+  const addToShoppingList = (ingredientsString) => {
+    if (!ingredientsString || ingredientsString === '未填寫') return;
+    const items = ingredientsString.split(/、|,|，/).map(item => item.trim()).filter(i => i !== "");
+    const newItems = items.map(name => ({ id: Date.now().toString() + Math.random(), name, checked: false }));
+    setShoppingList(prev => [...prev, ...newItems]);
+  };
+
+
+  const handleManualAddShopping = () => {
+    if (!manualIngredientInput.trim()) return;
+    setShoppingList(prev => [...prev, { id: Date.now().toString(), name: manualIngredientInput.trim(), checked: false }]);
+    setManualIngredientInput('');
+ 
+  };
+
+
+  const toggleShoppingItem = (id) => {
+    setShoppingList(prev => prev.map(item => item.id === id ? { ...item, checked: !item.checked } : item));
+  };
+
+
+  const deleteShoppingItem = (id) => {
+    setShoppingList(prev => prev.filter(item => item.id !== id));
+  };  
+
+
+
+
+
+      {/* ================= 各種 Modals ================= */}
+
+      
+// 用途：App 開啟時先檢查是否有已儲存登入；未檢查完之前先不顯示 login
+if (isCheckingSavedLogin) {
+  return null;
+}
+
+// 1. 登入頁面
+if (appStage === 'login') {
+  return (
+    <View style={styles.authScreen}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFF8F0" />
+
+<ScrollView
+  style={styles.content}
+  keyboardShouldPersistTaps="handled"
+  contentContainerStyle={{
+  paddingBottom: 100 + Math.max(insets.bottom, 16)
+}}
+>
+    
+        {/* 標題 */}
+        <View style={styles.authTitleArea}>
+          <Text style={styles.sectionTitleLarge}>🍲 今晚食乜餸</Text>
+        </View>
+
+        {/* 卡片 */}
+        <View style={styles.searchSectionCard}>
+          <Text style={styles.sectionTitleSmall}>🔐 帳號登入</Text>
+
+          {/* 電郵 */}
+          <Text style={styles.label}>電郵</Text>
+          <TextInput
+            style={styles.input}
+            placeholderTextColor="#B8A89A"
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+
+          {/* 密碼 */}
+          <Text style={styles.label}>密碼</Text>
+          <TextInput
+            style={styles.input}
+            placeholderTextColor="#B8A89A"
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+          />
+
+          {/* 登入 */}
+          <TouchableOpacity
+            style={styles.mainActionBtn}
+            onPress={handleLogin}
+          >
+            <Text style={styles.mainActionText}>登入</Text>
+          </TouchableOpacity>
+
+          {/* 切換去註冊 */}
+          <TouchableOpacity
+            style={styles.switchStageLink}
+            onPress={() => setAppStage('register')}
+          >
+            
+<Text style={styles.switchStageText}>
+  還沒有帳號？立即
+  <Text style={styles.switchToRegisterText}>註冊</Text>
+</Text>
+
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+// 2. 註冊頁面
+if (appStage === 'register') {
+  return (
+    <View style={styles.authScreen}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFF8F0" />
+
+      <ScrollView
+  style={styles.content}
+  keyboardShouldPersistTaps="handled"
+contentContainerStyle={{
+  paddingBottom: 100 + Math.max(insets.bottom, 16)
+}}
+>
+        {/* 標題 */}
+        <View style={styles.authTitleArea}>
+          <Text style={styles.sectionTitle}>📝 建立新帳號</Text>
+        </View>
+
+        {/* 卡片 */}
+        <View style={styles.searchSectionCard}>
+         
+          {/* 暱稱 */}
+          <Text style={styles.label}>暱稱 *</Text>
+          <TextInput
+            style={styles.input}
+            placeholderTextColor="#B8A89A"
+            value={nickname}
+            onChangeText={setNickname}
+          />
+
+          {/* 電郵 */}
+          <Text style={styles.label}>電郵 *</Text>
+          <TextInput
+            style={styles.input}
+            placeholderTextColor="#B8A89A"
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+
+          {/* 密碼 */}
+          <Text style={styles.label}>密碼 *</Text>
+          <TextInput
+            style={styles.input}
+            placeholderTextColor="#B8A89A"
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+          />
+
+          {/* 確認密碼 */}
+          <Text style={styles.label}>確認密碼 *</Text>
+          <TextInput
+            style={styles.input}
+            placeholderTextColor="#B8A89A"
+            secureTextEntry
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+          />
+
+          {/* 註冊按鈕 */}
+          <TouchableOpacity
+            style={styles.mainActionBtnAlt}
+            onPress={handleRegister}
+          >
+            <Text style={styles.mainActionText}>註冊</Text>
+          </TouchableOpacity>
+
+          {/* 返回登入 */}
+          <TouchableOpacity
+            style={styles.switchStageLink}
+            onPress={() => setAppStage('login')}
+          >
+            <Text style={styles.switchStageText}>
+  已有帳號？返回
+  <Text style={styles.switchToLoginText}>登入</Text>
+</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+
+
+// 3. 群組設定頁面
+if (appStage === 'group_setup') {
+  return (
+    <View style={styles.authScreen}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFF8F0" />
+
+<ScrollView
+  style={styles.content}
+  keyboardShouldPersistTaps="handled"
+contentContainerStyle={{
+  paddingBottom: 100 + Math.max(insets.bottom, 16)
+}}
+>
+        <View style={styles.authTitleArea}>
+          <Text style={styles.sectionTitleLarge}>🏠 建立家庭群組</Text>
+        </View>
+
+        <View style={styles.setupCard}>
+          <Text style={styles.cardTitle}>1. 選擇您的初始角色</Text>
+
+          <View style={styles.roleRow}>
+            <TouchableOpacity
+              style={[
+                styles.roleSelectBtn,
+                userRole === 'eat' && styles.roleSelectBtnActive
+              ]}
+              onPress={() => setUserRole('eat')}
+            >
+              <Text style={styles.roleBtnText}>🐷 負責吃</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.roleSelectBtn,
+                userRole === 'cook' && styles.roleSelectBtnActive
+              ]}
+              onPress={() => setUserRole('cook')}
+            >
+              <Text style={styles.roleBtnText}>🍳 負責做飯</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <View style={styles.setupCard}>
+          <Text style={styles.cardTitle}>選項 A：新開群組</Text>
+
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={handleCreateFamilyGroup}
+          >
+            <Text style={styles.buttonText}>🔑 加入群組</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.setupCard}>
+          <Text style={styles.cardTitle}>選項 B：加入現有群組</Text>
+
+          <TextInput
+            style={styles.input}
+            placeholder="輸入家人邀請碼"
+            placeholderTextColor="#B8A89A"
+            value={inputInviteCode}
+            onChangeText={setInputInviteCode}
+            autoCapitalize="characters"
+          />
+
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={handleSwitchOrJoinGroup}
+          >
+            <Text style={styles.buttonText}>🔑 加入群組</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+return (
+  <SafeAreaView
+    style={styles.safeRoot}
+    edges={['top', 'left', 'right']}
+  >
+    <StatusBar
+      barStyle="dark-content"
+      backgroundColor="#FFF8F0"
+      translucent={false}
+    />
+
+    <View style={styles.container}>
+      <ScrollView
+        style={styles.content}
+        keyboardShouldPersistTaps="handled"
+contentContainerStyle={{
+  paddingBottom: 100 + Math.max(insets.bottom, 16)
+}}
+      >
+      {/* 頁面頂部 header：跟內容一起捲動，不固定置頂 */}
+      <View style={styles.header}>
+        <View style={styles.headerInner}>
+          <Text
+            style={styles.headerTitle}
+            numberOfLines={1}
+          >
+            {familyGroupName || '今晚食乜餸'} 🍲
+          </Text>
+        </View>
+      </View>
+
+
+
+{/* ================= 分頁 1: 首頁 ================= */}
+{currentTab === 'home' && (
+  <View style={styles.pageContent}>
+
+    {/* 收到點菜要求提示 */}
+    {incomingRequests.length > 0 && (
+      <TouchableOpacity
+        style={styles.noticeButton}
+        onPress={() => setRequestInboxVisible(true)}
+      >
+        <Text style={styles.noticeText}>
+          📨 你有 {incomingRequests.length} 個待處理點菜要求
+        </Text>
+      </TouchableOpacity>
+    )}
+
+    {/* 隨機抽菜 */}
+    <TouchableOpacity style={styles.luckyDrawButton} onPress={handleDraw}>
+      <Text style={styles.luckyDrawButtonText}>
+        ✨ 🔮 隨機食乜都好 🔮 ✨
+      </Text>
+    </TouchableOpacity>
+
+    {/* 篩選與搜尋 */}
+    <View style={styles.searchSectionCard}>
+      <Text style={styles.sectionTitleSmall}>🔍 搜尋菜式</Text>
+
+      <TextInput
+        style={styles.input}
+        placeholderTextColor="#B8A89A"
+        value={searchQuery}
+        onChangeText={setSearchQuery}
+      />
+
+      {/* === 功能按鈕列 === */}
+      <View style={styles.toolbarRow}>
+        <TouchableOpacity
+          style={[styles.smallActionButton, styles.neutralActionButton, { marginRight: 8 }]}
+          onPress={() => setSelectedTags([])}
+        >
+          <Text style={styles.smallActionButtonText}>
+            🧹 清空選取 ({selectedTags.length})
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.smallActionButton, styles.infoActionButton]}
+          onPress={() => setCustomModalVisible(true)}
+        >
+          <Text style={styles.smallActionButtonText}>
+            ⚙️ 管理標籤
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* 分類 / 標籤 */}
+      {getSortedCategoryKeys().map(key => {
+        const category = dynamicCategories[key];
+        const isExpanded = expandedCategories[key];
+
+        return (
+          <View key={key} style={styles.categoryBlock}>
+            <TouchableOpacity
+              style={styles.accordionHeader}
+              onPress={() => toggleCategoryExpand(key)}
+            >
+              <Text style={styles.categoryLabel}>{category.title}</Text>
+
+              <Text style={styles.searchHintText}>
+                {isExpanded ? '🔼 收起' : '🔍 展開'}
+              </Text>
+            </TouchableOpacity>
+
+            {isExpanded && (
+              <View style={styles.categoryContent}>
+                {category.isNested ? (
+                  getSortedSubCategoryKeys(key).map(subKey => (
+                    <View key={subKey} style={styles.subCategoryBlock}>
+                      <Text style={styles.subCategoryLabel}>
+                        └ {category.subCategories[subKey].title}
+                      </Text>
+
+                      <View style={styles.tagContainer}>
+                        {renderTagButtons(
+                          getSortedTags(
+                            category.subCategories[subKey].tags,
+                            key,
+                            subKey
+                          ),
+                          selectedTags,
+                          (tag) => {
+                            setSelectedTags(prev =>
+                              prev.includes(tag)
+                                ? prev.filter(t => t !== tag)
+                                : [...prev, tag]
+                            );
+                          }
+                        )}
+                      </View>
+                    </View>
+                  ))
+                ) : (
+                  <View style={styles.tagContainer}>
+                    {renderTagButtons(
+                      getSortedTags(category.tags, key),
+                      selectedTags,
+                      (tag) => {
+                        setSelectedTags(prev =>
+                          prev.includes(tag)
+                            ? prev.filter(t => t !== tag)
+                            : [...prev, tag]
+                        );
+                      }
+                    )}
+                  </View>
+                )}
+              </View>
+            )}
+          </View>
+        );
+      })}
+    </View>
+
+    {/* 家庭菜餚庫標題 + 編輯按鈕 */}
+    <View style={styles.sectionHeaderRow}>
+      <Text style={styles.sectionTitle}>
+        📋 家庭菜餚庫 ({(editableDisplayedDishes || []).length}個結果)
+      </Text>
+
+      {isCurrentUserAdmin && (
+        <TouchableOpacity
+          style={[
+            styles.editToggleButton,
+            isDishEditMode && styles.editToggleButtonActive
+          ]}
+          onPress={() => {
+            if (isDishEditMode) {
+              setDishEditSearchQuery('');
+              setSelectedDishIdsForHide([]);
+            }
+
+            setIsDishEditMode(prev => !prev);
+          }}
+        >
+          <Text style={styles.editToggleButtonText}>
+            {isDishEditMode ? '完成' : '編輯'}
+          </Text>
+        </TouchableOpacity>
+      )}
+    </View>
+
+    {/* 編輯模式操作區 */}
+    {isDishEditMode && isCurrentUserAdmin && (
+      <View style={styles.editToolbar}>
+        <Text style={styles.editToolbarHint}>
+          可先在上面篩選菜式標籤。
+        </Text>
+
+        <View style={styles.editToolbarButtonGroup}>
+          <View style={styles.editToolbarRow}>
+            <TouchableOpacity
+              style={[
+                styles.editMainActionButton,
+                selectedDishIdsForHide.length > 0
+                  ? styles.dangerActionButton
+                  : styles.disabledActionButton,
+                { marginRight: 8 }
+              ]}
+              disabled={selectedDishIdsForHide.length === 0}
+              onPress={handleAdminHideSelectedDishes}
+            >
+              <Text style={styles.editMainActionText}>
+                🧹 一鍵處理 ({selectedDishIdsForHide.length})
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.clearSelectionButton}
+              onPress={() => setSelectedDishIdsForHide([])}
+            >
+              <Text style={styles.clearSelectionText}>
+                清空
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
+            style={styles.hiddenManageButton}
+            onPress={() => setHiddenDishesModalVisible(true)}
+          >
+            <Text style={styles.hiddenManageButtonText}>
+              🙈 管理已隱藏菜式 ({(hiddenDishesForCurrentGroup || []).length})
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    )}
+
+    {/* 家庭菜餚庫列表 */}
+    {(editableDisplayedDishes || []).map(dish => {
+      const status = String(
+        dish.publishStatus ?? (dish.isPublic ? 'approved' : 'private')
+      ).trim().toLowerCase();
+
+      const isSelectedForHide = selectedDishIdsForHide.includes(dish.id);
+
+      return (
+        <TouchableOpacity
+          key={dish.id}
+          style={[
+            styles.dishCardSelectable,
+            isDishEditMode &&
+              isCurrentUserAdmin &&
+              isSelectedForHide &&
+              styles.dishCardSelected
+          ]}
+          onPress={() => {
+            // 編輯模式：點整張卡 = 勾選 / 取消勾選
+            if (isDishEditMode && isCurrentUserAdmin) {
+              toggleDishHideSelection(dish.id);
+              return;
+            }
+
+            // 非編輯模式：正常點菜
+            openRequestModal(dish, customDateInput);
+          }}
+        >
+          <View style={styles.dishCardRow}>
+            {/* 編輯模式 checkbox */}
+            {isDishEditMode && isCurrentUserAdmin && (
+              <View
+                style={[
+                  styles.checkboxBox,
+                  isSelectedForHide && styles.checkboxBoxSelected
+                ]}
+              >
+                <Text style={styles.checkboxTick}>
+                  {isSelectedForHide ? '✓' : ''}
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.dishCardContent}>
+              <View style={styles.dishCardHeader}>
+                <Text style={styles.dishName}>{dish.name}</Text>
+
+                <Text
+                  style={[
+                    styles.dishStatusText,
+                    status === 'approved' && styles.dishStatusApproved,
+                    status === 'pending' && styles.dishStatusPending,
+                    status === 'private' && styles.dishStatusPrivate
+                  ]}
+                >
+                  {status === 'approved'
+                    ? '🌐 公開'
+                    : status === 'pending'
+                      ? '⏳ 待確認'
+                      : '🔒 私房'}
+                </Text>
+              </View>
+
+              <Text style={styles.dishDetails}>
+                材料: {dish.ingredients} | 分類: {Array.isArray(dish.tags) ? dish.tags.join(', ') : ''}
+              </Text>
+
+              {!isDishEditMode && (
+                <Text style={styles.clickHint}>
+                  👉 我要食呢個
+                </Text>
+              )}
+            </View>
+          </View>
+        </TouchableOpacity>
+      );
+    })}
+
+  </View>
+)}
+
+{/* ================= 分頁 2: 家庭動態 ================= */}
+{currentTab === 'group' && (
+  <View style={styles.pageContent}>
+    <View style={styles.monthSwitcherRow}>
+      <TouchableOpacity onPress={handlePrevMonth}>
+        <Text style={styles.switchMonthText}>◀ 上個月</Text>
+      </TouchableOpacity>
+
+      <Text style={styles.monthTitle}>
+        📅 {currentYear}年 {currentMonth}月
+      </Text>
+
+      <TouchableOpacity onPress={handleNextMonth}>
+        <Text style={styles.switchMonthText}>下個月 ▶</Text>
+      </TouchableOpacity>
+    </View>
+
+    <View style={styles.calendarContainer}>
+      <View style={styles.calendarHeaderRow}>
+        {['日', '一', '二', '三', '四', '五', '六'].map(w => (
+          <Text key={w} style={styles.calendarHeaderCell}>
+            {w}
+          </Text>
+        ))}
+      </View>
+
+      <View style={styles.calendarGrid}>
+        {calendarCells.map((day, index) => {
+          if (day === null) {
+            return (
+              <View
+                key={`empty-${index}`}
+                style={styles.calendarCellEmpty}
+              />
+            );
+          }
+
+          const thisDateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+          const isToday =
+            currentYear === CURRENT_DATE.getFullYear() &&
+            currentMonth === (CURRENT_DATE.getMonth() + 1) &&
+            day === CURRENT_DATE.getDate();
+
+          const hasApprovedEvent = approvedDates.includes(thisDateStr);
+          const hasCompletedEvent = completedDates.includes(thisDateStr);
+          const hasEvent = hasApprovedEvent || hasCompletedEvent;
+          const isPast = isPastDate(thisDateStr);
+
+          return (
+            <TouchableOpacity
+              key={`day-${day}`}
+              style={[
+                styles.calendarCell,
+                isToday && styles.calendarCellToday,
+                hasApprovedEvent && styles.calendarCellApproved,
+                hasCompletedEvent && styles.calendarCellCompleted,
+                isPast && !hasEvent && styles.calendarCellPast
+              ]}
+              onPress={() => {
+                if (isPast && !hasEvent) {
+                  showMessage('已過去的日子不能再排餐或修改。');
+                  return;
+                }
+
+                handleCellPress(day);
+              }}
+            >
+              <Text
+                style={[
+                  styles.calendarDayNum,
+                  hasEvent && styles.calendarDayNumHasEvent,
+                  isToday && !hasEvent && styles.calendarDayNumToday,
+                  isPast && !hasEvent && styles.calendarDayNumPast
+                ]}
+              >
+                {day}
+              </Text>
+
+              {hasApprovedEvent && (
+                <View style={styles.calendarDotWhite} />
+              )}
+
+              {hasCompletedEvent && (
+                <View style={styles.calendarDotWhite} />
+              )}
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+
+    <Text style={styles.sectionTitle}>
+      💬 排餐記錄 👇
+    </Text>
+
+    {(sortedRequests || []).map(req => {
+      // 用途：判斷目前登入者是否是這張合併 request 的其中一位大廚
+      const canCurrentUserReview = Array.isArray(req.mergedCookEmails)
+        ? req.mergedCookEmails.includes(email)
+        : req.targetCookEmail === email;
+
+      const displaySenders = Array.isArray(req.mergedSenders)
+        ? req.mergedSenders.join('、')
+        : (req.senderNickname || req.sender || '未知');
+
+      const displayCooks = Array.isArray(req.mergedCooks)
+        ? req.mergedCooks.join('、')
+        : (req.targetCookName || req.target || '未知');
+
+      const requestIds = Array.isArray(req.mergedRequestIds)
+        ? req.mergedRequestIds
+        : [req.id];
+
+      return (
+        <View key={req.id} style={styles.requestCard}>
+          <View style={styles.requestCardHeader}>
+            <Text style={styles.dishName}>🍽️ {req.dishName}</Text>
+
+            <Text
+              style={[
+                styles.statusBadge,
+                req.status === 'approved' && styles.statusBadgeApproved,
+                req.status === 'rejected' && styles.statusBadgeRejected,
+                req.status === 'pending' && styles.statusBadgePending
+              ]}
+            >
+              {getStatusLabel(req.status)}
+            </Text>
+          </View>
+
+          <Text style={styles.requestMetaText}>
+            發起成員：🙋‍♂️{' '}
+            <Text style={styles.requestMetaStrong}>
+              {displaySenders}
+            </Text>
+          </Text>
+
+          <Text style={styles.requestMetaText}>
+            日期餐次：
+            <Text style={styles.timeHighlight}>
+              {req.date} ({req.meal})
+            </Text>
+          </Text>
+
+          <Text style={styles.requestMetaTextBottom}>
+            掌廚大廚：👨‍🍳{' '}
+            <Text style={styles.requestMetaStrong}>
+              {displayCooks}
+            </Text>
+          </Text>
+
+          {(req.status === 'pending' || req.status === 'approved') && canCurrentUserReview && (
+            <View style={styles.actionRow}>
+              {req.status === 'pending' && (
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.successActionButton]}
+                  onPress={() => handleApproveRequest(requestIds)}
+                >
+                  <Text style={styles.actionBtnText}>👍 同意</Text>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.infoActionButton]}
+                disabled={rescheduleModalVisible}
+                onPress={() => openRescheduleModal(req)}
+              >
+                <Text style={styles.actionBtnText}>📅 改期</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.dangerActionButton]}
+                onPress={() => openRejectModal(req)}
+              >
+                <Text style={styles.actionBtnText}>
+                  {req.status === 'approved' ? '👎取消 ' : '👎 拒絕'}
+                </Text>
+              </TouchableOpacity>
+
+              {req.status === 'approved' && (
+                <TouchableOpacity
+                  style={[styles.actionBtn, styles.neutralActionButton]}
+                  onPress={() => handleCompleteRequest(requestIds)}
+                >
+                  <Text style={styles.actionBtnText}>✅ 已完成</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+
+          {req.status === 'pending' && !canCurrentUserReview && (
+            <Text style={styles.waitingReviewText}>
+              ⏳ 正在等待大廚 {displayCooks} 審核中...
+            </Text>
+          )}
+        </View>
+      );
+    })}
+  </View>
+)}
+
+
+{/* ================= 分頁 3: 加新菜式 ================= */}
+{currentTab === 'add' && (
+  <View style={styles.pageContent}>
+    <View style={styles.formCard}>
+      <Text style={styles.sectionTitleLarge}>➕ 新增私房食譜</Text>
+
+      <Text style={styles.label}>1. 菜式名稱 *</Text>
+      <TextInput
+        style={styles.input}
+        value={newDishName}
+        onChangeText={setNewDishName}
+        placeholderTextColor="#B8A89A"
+      />
+
+      {recommendedDishes.length > 0 && (
+        <View style={styles.recommendBox}>
+          <Text style={styles.recommendWarningText}>
+            ⚠️ 提示：已有相似菜色：
+          </Text>
+
+          {recommendedDishes.map(r => (
+            <Text key={r.id} style={styles.recommendItemText}>
+              • {r.name}
+            </Text>
+          ))}
+        </View>
+      )}
+
+      <Text style={styles.label}>2. 食材</Text>
+      <TextInput
+        style={styles.input}
+        value={newDishIngredients}
+        onChangeText={setNewDishIngredients}
+        placeholderTextColor="#B8A89A"
+      />
+
+      <View style={styles.formSectionHeaderRow}>
+        <Text style={styles.label}>3. 分類標籤 </Text>
+
+        <TouchableOpacity
+          style={styles.inlineManageButton}
+          onPress={() => setCustomModalVisible(true)}
+        >
+          <Text style={styles.inlineManageButtonText}>
+            ⚙️ 管理標籤
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {getSortedCategoryKeys().map(key => {
+        const cat = dynamicCategories[key];
+
+        return (
+          <View key={`add-${key}`} style={styles.addCategoryBlock}>
+            <Text style={styles.miniCategoryLabel}>
+              {cat.title}
+            </Text>
+
+            {cat.isNested ? (
+              getSortedSubCategoryKeys(key).map(subKey => (
+                <View key={subKey} style={styles.addSubCategoryBlock}>
+                  <Text style={styles.miniCategoryLabel}>
+                    └ {cat.subCategories[subKey].title}
+                  </Text>
+
+                  <View style={styles.tagContainer}>
+                    {getSortedTags(cat.subCategories[subKey].tags, key, subKey).map(t => {
+                      const isSelected = addPageSelectedTags.includes(t);
+
+                      return (
+                        <TouchableOpacity
+                          key={t}
+                          style={[
+                            styles.miniSelectBtn,
+                            isSelected && styles.miniSelectBtnActive
+                          ]}
+                          onPress={() => {
+                            setAddPageSelectedTags(prev =>
+                              prev.includes(t)
+                                ? prev.filter(x => x !== t)
+                                : [...prev, t]
+                            );
+                          }}
+                        >
+                          <Text
+                            style={[
+                              styles.miniSelectBtnText,
+                              isSelected && styles.miniSelectBtnTextActive
+                            ]}
+                          >
+                            {t}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              ))
+            ) : (
+              <View style={styles.tagContainer}>
+                {getSortedTags(cat.tags, key).map(t => {
+                  const isSelected = addPageSelectedTags.includes(t);
+
+                  return (
+                    <TouchableOpacity
+                      key={t}
+                      style={[
+                        styles.miniSelectBtn,
+                        isSelected && styles.miniSelectBtnActive
+                      ]}
+                      onPress={() => {
+                        setAddPageSelectedTags(prev =>
+                          prev.includes(t)
+                            ? prev.filter(x => x !== t)
+                            : [...prev, t]
+                        );
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.miniSelectBtnText,
+                          isSelected && styles.miniSelectBtnTextActive
+                        ]}
+                      >
+                        {t}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        );
+      })}
+
+      <Text style={styles.label}>4. 發佈權限</Text>
+
+      <View style={styles.permissionRow}>
+        <TouchableOpacity
+          style={[
+            styles.permBtn,
+            !isPublic && styles.permBtnActive
+          ]}
+          onPress={() => setIsPublic(false)}
+        >
+          <Text style={styles.permBtnText}>
+            🔒   {familyGroupName}私有
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.permBtn,
+            isPublic && styles.permBtnActive
+          ]}
+          onPress={() => setIsPublic(true)}
+        >
+          <Text style={styles.permBtnText}>
+            🌐 公開分享
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity
+        style={styles.submitDishBtn}
+        onPress={handleAddDish}
+      >
+        <Text style={styles.submitDishBtnText}>
+          💾 儲存食譜
+        </Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+)}
+{/* ================= 分頁 4: 購物清單 ================= */}
+{currentTab === 'shopping' && (
+  <View style={styles.pageContent}>
+    <View style={styles.formCard}>
+      <Text style={styles.sectionTitleLarge}>🛒 購物清單</Text>
+
+      <View style={styles.shoppingInputRow}>
+        <TextInput
+          style={[styles.input, styles.shoppingInput]}
+          placeholderTextColor="#B8A89A"
+          value={manualIngredientInput}
+          onChangeText={setManualIngredientInput}
+          onSubmitEditing={handleManualAddShopping}
+        />
+
+        <TouchableOpacity
+          style={styles.confirmBtnReal}
+          onPress={handleManualAddShopping}
+        >
+          <Text style={styles.confirmBtnRealText}>新增</Text>
+        </TouchableOpacity>
+      </View>
+
+      {shoppingList.length === 0 ? (
+        <Text style={styles.emptyShoppingText}>
+          清單目前空空如也唷！
+        </Text>
+      ) : (
+        shoppingList.map(item => (
+          <View key={item.id} style={styles.shoppingItemRow}>
+            <TouchableOpacity
+              onPress={() => toggleShoppingItem(item.id)}
+              style={styles.shoppingItemMain}
+            >
+              <Text
+                style={[
+                  styles.shoppingItemText,
+                  item.checked && styles.shoppingItemTextChecked
+                ]}
+              >
+                {item.checked ? '✅ ' : '⬜ '}
+                {item.name}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.shoppingDeleteButton}
+              onPress={() => deleteShoppingItem(item.id)}
+            >
+              <Text style={styles.shoppingDeleteText}>👍🏻</Text>
+            </TouchableOpacity>
+          </View>
+        ))
+      )}
+    </View>
+  </View>
+)}
+
+{/* ================= 分頁 5: 設定 ================= */}
+{currentTab === 'profile' && (
+  <View style={styles.pageContent}>
+
+    {/* 個人檔案設定 */}
+    <View style={styles.formCard}>
+      <Text style={styles.sectionTitleBlock}>👤 個人檔案設定</Text>
+
+      {!isEditingProfile ? (
+        <View>
+          <View style={styles.profileInfoBox}>
+            <Text style={styles.profileText}>
+              🐷 我的暱稱：
+              <Text style={styles.profileHighlightText}>
+                {nickname}
+              </Text>
+            </Text>
+
+            <Text style={styles.profileText}>
+              🛠️ 預設角色：
+              <Text style={styles.profileStrongText}>
+                {userRole === 'eat' ? '吃貨' : '大廚'}
+              </Text>
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.profileEditButton}
+            onPress={() => {
+              setEditNickname(nickname);
+              setEditRole(userRole);
+              setEditGroupName(familyGroupName);
+              setIsEditingProfile(true);
+            }}
+          >
+            <Text style={styles.profileEditButtonText}>
+              ✏️ 修改個人資料
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View>
+          <Text style={styles.label}>修改我的暱稱：</Text>
+          <TextInput
+            style={styles.input}
+            value={editNickname}
+            onChangeText={setEditNickname}
+          />
+
+          <Text style={styles.label}>更換預設角色：</Text>
+          <View style={styles.permissionRowSpaced}>
+            <TouchableOpacity
+              style={[
+                styles.permBtn,
+                editRole === 'eat' && styles.permBtnActive
+              ]}
+              onPress={() => setEditRole('eat')}
+            >
+              <Text style={styles.permBtnText}>🐷 吃貨</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.permBtn,
+                editRole === 'cook' && styles.permBtnActive
+              ]}
+              onPress={() => setEditRole('cook')}
+            >
+              <Text style={styles.permBtnText}>🍳 大廚</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.profileEditButtonRow}>
+            <TouchableOpacity
+              style={styles.profileCancelButton}
+              onPress={() => {
+                setIsEditingProfile(false);
+                setEditNickname(nickname);
+                setEditRole(userRole);
+              }}
+            >
+              <Text style={styles.profileCancelButtonText}>取消</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.profileSaveButton}
+              onPress={() => {
+                setEditGroupName(familyGroupName);
+                handleSaveProfile();
+                setIsEditingProfile(false);
+              }}
+            >
+              <Text style={styles.profileSaveButtonText}>💾 儲存修改</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+    </View>
+
+    {/* 修改家庭群組名稱 */}
+    <View style={styles.formCard}>
+      <Text style={styles.sectionTitleBlock}>🏠 修改家庭群組名稱</Text>
+
+      {!isEditingGroupName ? (
+        <View>
+          <View style={styles.profileInfoBox}>
+            <Text style={styles.profileText}>
+              家庭群組名稱：
+              <Text style={styles.profileStrongText}>
+                {familyGroupName}
+              </Text>
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.profileEditButton}
+            onPress={() => {
+              setEditNickname(nickname);
+              setEditRole(userRole);
+              setEditGroupName(familyGroupName);
+              setIsEditingGroupName(true);
+            }}
+          >
+            <Text style={styles.profileEditButtonText}>
+              ✏️ 修改家庭群組名稱
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View>
+          <Text style={styles.label}>修改家庭群組名稱：</Text>
+          <TextInput
+            style={styles.input}
+            value={editGroupName}
+            onChangeText={setEditGroupName}
+          />
+
+          <View style={styles.profileEditButtonRow}>
+            <TouchableOpacity
+              style={styles.profileCancelButton}
+              onPress={() => {
+                setIsEditingGroupName(false);
+                setEditGroupName(familyGroupName);
+              }}
+            >
+              <Text style={styles.profileCancelButtonText}>取消</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.profileSaveButton}
+              onPress={() => {
+                setEditNickname(nickname);
+                setEditRole(userRole);
+                handleSaveProfile();
+                setIsEditingGroupName(false);
+              }}
+            >
+              <Text style={styles.profileSaveButtonText}>💾 儲存修改</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+    </View>
+
+    {/* 家庭群組成員管理 */}
+    <View style={styles.formCard}>
+      <View style={styles.profileSectionHeaderRow}>
+        <Text style={styles.sectionTitleBlock}>
+          👥 家庭群組成員管理 ({groupMembers.length}/10 人)
+        </Text>
+
+        {isCurrentUserAdmin && (
+          <TouchableOpacity
+            style={[
+              styles.memberManageToggleButton,
+              isManagingMembers && styles.memberManageToggleButtonActive
+            ]}
+            onPress={() => setIsManagingMembers(prev => !prev)}
+          >
+            <Text style={styles.memberManageToggleButtonText}>
+              {isManagingMembers ? '完成' : '管理'}
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      <TouchableOpacity
+        activeOpacity={0.8}
+        onLongPress={handleCopyGroupInviteCode}
+        style={styles.groupCodeCopyBox}
+      >
+        <Text style={styles.groupCodeText}>
+          群組代碼：{groupInviteCode} (邀請新成員時使用・長按複製)
+        </Text>
+
+        </TouchableOpacity>
+
+      {(groupMembers || []).map(member => {
+        const displayName = member.isMe ? `${member.name} (我自己)` : member.name;
+        const isCook = member.userRole === 'cook';
+
+        return (
+          <View key={member.id} style={styles.memberCard}>
+            <View style={styles.memberTopRow}>
+              <View style={styles.memberInfoArea}>
+                <Text style={styles.memberNameText}>
+                  {displayName}
+                </Text>
+
+                <Text
+                  style={[
+                    styles.memberRoleText,
+                    isCook && styles.memberRoleCookText
+                  ]}
+                >
+                  {isCook ? '🍳 主要掌廚' : '🐷 快樂吃貨'}
+                </Text>
+              </View>
+
+              <Text style={styles.memberGroupRoleText}>
+                {member.isMe
+                  ? '目前登入者'
+                  : member.groupRole === 'owner'
+                    ? '群組擁有人'
+                    : member.groupRole === 'admin'
+                      ? 'Admin'
+                      : '群組成員'}
+              </Text>
+            </View>
+
+            {isManagingMembers &&
+              isCurrentUserAdmin &&
+              !member.isMe &&
+              member.groupRole !== 'owner' && (
+                <View style={styles.memberButtonRow}>
+                  <TouchableOpacity
+                    style={[
+                      styles.memberSmallButton,
+                      member.groupRole === 'admin'
+                        ? styles.memberAdminToggleOffButton
+                        : styles.memberAdminToggleOnButton
+                    ]}
+                    onPress={() => handleToggleAdmin(member)}
+                  >
+                    <Text style={styles.memberSmallButtonText}>
+                      {member.groupRole === 'admin' ? '取消 admin' : '設為 admin'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.memberSmallButton, styles.memberRemoveButton]}
+                    onPress={() => handleRemoveGroupMemberByAdmin(member)}
+                  >
+                    <Text style={styles.memberRemoveButtonText}>
+                      ❌ 移除
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+          </View>
+        );
+      })}
+    </View>
+
+    {/* 切換 / 加入其他群組 */}
+    <View style={styles.formCard}>
+      <Text style={styles.sectionTitleBlock}>🔄 加入其他群組</Text>
+
+      <Text style={styles.label}>輸入群組邀請碼：</Text>
+      <TextInput
+        style={styles.input}
+        placeholder="例如：A7K9QX"
+        placeholderTextColor="#B8A89A"
+        value={inputInviteCode}
+        onChangeText={setInputInviteCode}
+        autoCapitalize="characters"
+      />
+
+      <TouchableOpacity
+        style={styles.mainActionBtnAlt}
+        onPress={handleSwitchOrJoinGroup}
+      >
+        <Text style={styles.mainActionText}>
+          🔑 切換 / 加入群組
+        </Text>
+      </TouchableOpacity>
+    </View>
+
+    {/* 帳號管理 */}
+    <View style={styles.formCard}>
+      <Text style={styles.sectionTitleBlock}>⚠️ 帳號與群組管理</Text>
+
+      <TouchableOpacity
+        style={styles.logoutButton}
+        onPress={handleLogout}
+      >
+        <Text style={styles.mainActionText}>
+          🚪 登出帳號
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.deleteAccountButton}
+        onPress={() => handleDeleteMyAccount()}
+      >
+        <Text style={styles.mainActionText}>
+          🗑️ 刪除我的帳號
+        </Text>
+      </TouchableOpacity>
+    </View>
+
+  </View>
+)}
+      </ScrollView>
+
+
+      {/* ================= 各種 Modals ================= */}
+
+{/* 已隱藏菜式管理 Modal */}
+<Modal
+  animationType="slide"
+  transparent={true}
+  visible={hiddenDishesModalVisible}
+  onRequestClose={() => setHiddenDishesModalVisible(false)}
+>
+  <View style={styles.modalCentered}>
+    <View style={styles.hiddenDishesModalView}>
+      <Text style={styles.modalTitle}>
+        🙈 已隱藏菜式 ({(hiddenDishesForCurrentGroup || []).length})
+      </Text>
+
+      {(hiddenDishesForCurrentGroup || []).length === 0 ? (
+        <Text style={styles.emptyModalText}>
+          目前沒有被此群組隱藏的菜式。
+        </Text>
+      ) : (
+        <ScrollView
+          style={styles.hiddenDishesScroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          {(hiddenDishesForCurrentGroup || []).map(dish => {
+            const status = String(
+              dish.publishStatus ?? (dish.isPublic ? 'approved' : 'private')
+            ).trim().toLowerCase();
+
+            return (
+              <View
+                key={dish.id}
+                style={styles.hiddenDishCard}
+              >
+                <View style={styles.dishCardHeader}>
+                  <Text style={styles.dishName}>{dish.name}</Text>
+
+                  <Text
+                    style={[
+                      styles.dishStatusText,
+                      status === 'approved' && styles.dishStatusApproved,
+                      status !== 'approved' && styles.dishStatusPrivate
+                    ]}
+                  >
+                    {status === 'approved' ? '🌐 公開' : '🔒 私房'}
+                  </Text>
+                </View>
+
+                <Text style={styles.dishDetails}>
+                  材料: {dish.ingredients} | 分類: {Array.isArray(dish.tags) ? dish.tags.join(', ') : ''}
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.restoreDishButton}
+                  onPress={() => handleAdminRestoreHiddenDish(dish)}
+                >
+                  <Text style={styles.restoreDishButtonText}>
+                    ↩️ 還原到家庭菜餚庫
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+        </ScrollView>
+      )}
+
+      <View style={styles.modalFooterButtonArea}>
+        <Button
+          title="關閉"
+          color="gray"
+          onPress={() => setHiddenDishesModalVisible(false)}
+        />
+      </View>
+    </View>
+  </View>
+</Modal>
+
+{/* ================= 全新：支援細分類選取的底部彈出半分頁 ================= */}
+<Modal
+  visible={customModalVisible}
+  animationType="slide"
+  transparent={true}
+  onRequestClose={() => setCustomModalVisible(false)}
+>
+  <View style={styles.bottomSheetOverlay}>
+    <View style={styles.bottomSheetContainer}>
+
+      {/* 標題欄 */}
+      <View style={styles.bottomSheetHeader}>
+        <Text style={styles.bottomSheetTitle}>🛠️ 管理標籤</Text>
+
+        <TouchableOpacity
+          onPress={() => setCustomModalVisible(false)}
+          style={styles.bottomSheetCloseButton}
+        >
+          <Text style={styles.bottomSheetCloseText}>✕</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        style={styles.bottomSheetScroll}
+        keyboardShouldPersistTaps="handled"
+contentContainerStyle={{
+  paddingBottom: 100 + Math.max(insets.bottom, 16)
+}}
+      >
+        {/* 部分一：加入新分類 */}
+        <View style={styles.tagManagerSection}>
+          <Text style={styles.tagManagerSectionTitlePink}>
+            🔸 加入自訂分類
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            placeholderTextColor="#B8A89A"
+            value={newCategoryName}
+            onChangeText={setNewCategoryName}
+          />
+        </View>
+
+        {/* 部分二：加入新標籤 */}
+        <View style={styles.tagManagerSection}>
+          <Text style={styles.tagManagerSectionTitlePink}>
+            🔸 加入自訂標籤
+          </Text>
+
+          <TextInput
+            style={styles.input}
+            placeholderTextColor="#B8A89A"
+            value={newModalTagName}
+            onChangeText={setNewModalTagName}
+          />
+
+          {/* 選擇加入哪個分類：只有在「沒有輸入新分類」時才需要選 */}
+          {newCategoryName.trim() === '' && (
+            <View style={styles.modalCategoryPickerArea}>
+              <Text style={styles.modalSmallHintText}>
+                此自訂標籤的分類：
+              </Text>
+
+              <View style={styles.modalCategoryChipWrap}>
+                {/* 1. 先渲染最常用的前 4 個原生分類 */}
+                {getSortedCategoryKeys().slice(0, 4).map(catKey => {
+                  const isSelected = selectedModalCat === catKey;
+
+                  return (
+                    <TouchableOpacity
+                      key={catKey}
+                      style={[
+                        styles.modalCategoryChip,
+                        isSelected && styles.modalCategoryChipSelected
+                      ]}
+                      onPress={() => {
+                        if (selectedModalCat === catKey) {
+                          setSelectedModalCat('none');
+                          setSelectedSubModalCat('');
+                        } else {
+                          setSelectedModalCat(catKey);
+
+                          if (dynamicCategories[catKey].isNested) {
+                            setSelectedSubModalCat(
+                              Object.keys(dynamicCategories[catKey].subCategories)[0]
+                            );
+                          } else {
+                            setSelectedSubModalCat('');
+                          }
+                        }
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.modalCategoryChipText,
+                          isSelected && styles.modalCategoryChipTextSelected
+                        ]}
+                      >
+                        {dynamicCategories[catKey].title}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+
+                {/* 2. 展開狀態下，才顯示第 5 個以後的自訂與其他分類 */}
+                {getSortedCategoryKeys().length > 4 && showMoreModalCats && (
+                  getSortedCategoryKeys().slice(4).map(catKey => {
+                    const isSelected = selectedModalCat === catKey;
+
+                    return (
+                      <TouchableOpacity
+                        key={catKey}
+                        style={[
+                          styles.modalCategoryChip,
+                          isSelected && styles.modalCategoryChipSelected
+                        ]}
+                        onPress={() => {
+                          if (selectedModalCat === catKey) {
+                            setSelectedModalCat('none');
+                            setSelectedSubModalCat('');
+                          } else {
+                            setSelectedModalCat(catKey);
+
+                            if (dynamicCategories[catKey].isNested) {
+                              setSelectedSubModalCat(
+                                Object.keys(dynamicCategories[catKey].subCategories)[0]
+                              );
+                            } else {
+                              setSelectedSubModalCat('');
+                            }
+                          }
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.modalCategoryChipText,
+                            isSelected && styles.modalCategoryChipTextSelected
+                          ]}
+                        >
+                          {dynamicCategories[catKey].title}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
+
+                {/* 3. 切換展開與收合的收納按鈕 */}
+                {getSortedCategoryKeys().length > 4 && (
+                  <TouchableOpacity
+                    style={styles.moreCategoryToggleButton}
+                    onPress={() => setShowMoreModalCats(prev => !prev)}
+                  >
+                    
+<Text style={styles.moreCategoryToggleText}>
+  {showMoreModalCats ? '收起' : '更多分類'}
+</Text>
+
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* 4. 如果選中的分類有巢狀子分類（像是食物種類），繼續動態呈現細分類項 */}
+              {selectedModalCat !== 'none' && dynamicCategories[selectedModalCat]?.isNested && (
+                <View style={styles.modalSubCategoryBox}>
+                  <Text style={styles.modalSubCategoryHint}>
+                    └ 請選擇目標細分類：
+                  </Text>
+
+                  <View style={styles.modalCategoryChipWrap}>
+                    {getSortedSubCategoryKeys(selectedModalCat).map(subKey => {
+                      const isSelected = selectedSubModalCat === subKey;
+
+                      return (
+                        <TouchableOpacity
+                          key={subKey}
+                          style={[
+                            styles.modalSubCategoryChip,
+                            isSelected && styles.modalSubCategoryChipSelected
+                          ]}
+                          onPress={() => setSelectedSubModalCat(subKey)}
+                        >
+                          <Text
+                            style={[
+                              styles.modalSubCategoryChipText,
+                              isSelected && styles.modalSubCategoryChipTextSelected
+                            ]}
+                          >
+                            {dynamicCategories[selectedModalCat].subCategories[subKey].title}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
+            </View>
+          )}
+        </View>
+
+ {/* 下方控制按鈕列 */}
+<View style={styles.modalButtonRow}>
+  <TouchableOpacity
+    style={styles.bottomSheetCancelButton}
+    onPress={() => setCustomModalVisible(false)}
+  >
+    <Text style={styles.bottomSheetCancelButtonText}>取消</Text>
+  </TouchableOpacity>
+
+  <TouchableOpacity
+    style={styles.modalSaveButton}
+    onPress={handleSaveTagsAndCategories}
+  >
+    <Text style={styles.modalSaveButtonText}>
+      儲存變更
+    </Text>
+  </TouchableOpacity>
+</View>
+
+        {/* 底部：編輯自訂分類 / 標籤 */}
+        <View style={styles.customEditSection}>
+          <TouchableOpacity
+            style={[
+              styles.customEditToggleButton,
+              isEditingCustomTags && styles.customEditToggleButtonActive
+            ]}
+            onPress={() => setIsEditingCustomTags(prev => !prev)}
+          >
+            <Text style={styles.customEditToggleText}>
+              {isEditingCustomTags ? '收起編輯區' : '✏️ 編輯自訂分類 / 標籤'}
+            </Text>
+          </TouchableOpacity>
+
+          {isEditingCustomTags && (
+            <View>
+
+
+              {/* 自訂分類區 */}
+              <Text style={styles.customCategoryTitle}>
+                📁 自訂分類
+              </Text>
+
+              {getCustomAddedCategories().length === 0 ? (
+                <Text style={styles.customEmptyText}>
+                  目前沒有自訂分類。
+                </Text>
+              ) : (
+                getCustomAddedCategories().map(item => {
+                  const isSelected = selectedCustomCategoryKeys.includes(item.catKey);
+
+                  return (
+                    <TouchableOpacity
+                      key={item.catKey}
+                      style={styles.customManageRow}
+                      onPress={() => toggleCustomCategorySelection(item.catKey)}
+                    >
+                      <View style={styles.customManageRowMain}>
+                        <Text style={styles.customManageNameText}>
+                          {isSelected ? '✅' : '⬜'} {item.title}
+                        </Text>
+
+                        <Text style={styles.customManageMetaText}>
+                          內含標籤：{item.tagCount} 個
+                        </Text>
+                      </View>
+
+                      <Text
+                        style={[
+                          styles.customManageStateText,
+                          isSelected && styles.customManageStateTextSelected
+                        ]}
+                      >
+                        {isSelected ? '已選取' : '點擊選取'}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+
+              {/* 自訂標籤區 */}
+              <Text style={styles.customTagTitle}>
+                🏷️ 自訂標籤
+              </Text>
+
+              {getCustomAddedTags().length === 0 ? (
+                <Text style={styles.customEmptyText}>
+                  目前沒有自訂標籤。
+                </Text>
+              ) : (
+                getCustomAddedTags().map(item => {
+                  const isSelected = selectedCustomTagNames.includes(item.tag);
+
+                  return (
+                    <TouchableOpacity
+                      key={`${item.catKey}-${item.subKey || 'main'}-${item.tag}`}
+                      style={styles.customManageRow}
+                      onPress={() => toggleCustomTagSelection(item.tag)}
+                    >
+                      <View style={styles.customManageRowMain}>
+                        <Text style={styles.customManageNameText}>
+                          {isSelected ? '✅' : '⬜'} {item.tag}
+                        </Text>
+
+                        <Text style={styles.customManageMetaText}>
+                          分類：{item.categoryTitle}
+                          {item.subCategoryTitle ? ` / ${item.subCategoryTitle}` : ''}
+                        </Text>
+                      </View>
+
+                      <Text
+                        style={[
+                          styles.customManageStateText,
+                          isSelected && styles.customManageStateTextSelected
+                        ]}
+                      >
+                        {isSelected ? '已選取' : '點擊選取'}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
+
+              {/* 批量刪除按鈕 */}
+              <TouchableOpacity
+                style={[
+                  styles.bulkDeleteButton,
+                  selectedCustomTagNames.length + selectedCustomCategoryKeys.length === 0 &&
+                    styles.bulkDeleteButtonDisabled
+                ]}
+                disabled={selectedCustomTagNames.length + selectedCustomCategoryKeys.length === 0}
+                onPress={handleDeleteSelectedCustomItems}
+              >
+                <Text style={styles.bulkDeleteButtonText}>
+                  🗑️ 刪除已選項目（
+                  {selectedCustomCategoryKeys.length} 個分類，
+                  {selectedCustomTagNames.length} 個標籤）
+                </Text>
+              </TouchableOpacity>
+
+              {/* 完成編輯並關閉 */}
+              <TouchableOpacity
+                style={styles.finishEditButton}
+                onPress={() => {
+                  setIsEditingCustomTags(false);
+                  setSelectedCustomTagNames([]);
+                  setSelectedCustomCategoryKeys([]);
+                  setCustomModalVisible(false);
+                }}
+              >
+                <Text style={styles.finishEditButtonText}>
+                  完成編輯並關閉
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </ScrollView>
+    </View>
+  </View>
+</Modal>
+
+
+
+
+{/* 點菜建議 Modal */}
+<Modal
+  animationType="slide"
+  transparent={true}
+  visible={requestModalVisible}
+  onRequestClose={() => setRequestModalVisible(false)}
+>
+  <View style={styles.modalCentered}>
+    <View style={styles.modalView}>
+      <Text style={styles.modalTitle}>🍲 提出想吃建議</Text>
+
+      {selectedDish && (
+        <View style={styles.modalContentFull}>
+          <Text style={styles.label}>
+            菜餚名稱：
+            <Text style={styles.modalStrongText}>
+              {selectedDish.name}
+            </Text>
+          </Text>
+
+          <Text style={styles.label}>指定家庭大廚：</Text>
+          <TouchableOpacity
+            style={styles.dropdownHeader}
+            onPress={() => setCookDropdownOpen(!cookDropdownOpen)}
+          >
+            <Text style={styles.dropdownHeaderText}>
+              {targetCook ? `👨‍🍳 ${targetCook}` : '請選擇大廚'} ▼
+            </Text>
+          </TouchableOpacity>
+
+          {cookDropdownOpen && (
+            <View style={styles.dropdownList}>
+              {cookOptions.map(member => (
+                <TouchableOpacity
+                  key={member.email || member.id}
+                  style={styles.dropdownItem}
+                  onPress={() => {
+                    setTargetCook(member.name || '');
+                    setTargetCookEmail(member.email || '');
+                    setCookDropdownOpen(false);
+                  }}
+                >
+                  <Text style={styles.dropdownItemText}>
+                    {member.name} {member.userRole === 'cook' ? '🍳 (負責做飯)' : ''}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          <Text style={styles.label}>餐次種類：</Text>
+          <TouchableOpacity
+            style={styles.dropdownHeader}
+            onPress={() => setMealDropdownOpen(!mealDropdownOpen)}
+          >
+            <Text style={styles.dropdownHeaderText}>
+              {selectedMeal ? `⏰ ${selectedMeal}` : '請選擇餐次'} ▼
+            </Text>
+          </TouchableOpacity>
+
+          {mealDropdownOpen && (
+            <View style={styles.dropdownList}>
+              {['早餐', '午餐', '下午茶', '晚餐', '宵夜'].map(meal => (
+                <TouchableOpacity
+                  key={meal}
+                  style={styles.dropdownItem}
+                  onPress={() => {
+                    setSelectedMeal(meal);
+                    setMealDropdownOpen(false);
+                  }}
+                >
+                  <Text style={styles.dropdownItemText}>
+                    {meal}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          <Text style={styles.label}>預計用餐日期 (YYYY-MM-DD)：</Text>
+          <TextInput
+            style={styles.input}
+            value={customDateInput}
+            onChangeText={setCustomDateInput}
+            placeholder="2026-05-27"
+            placeholderTextColor="#B8A89A"
+          />
+
+          <TouchableOpacity
+            style={styles.checkboxRow}
+            onPress={() => {
+              const nextValue = autoAddToList === true ? false : true;
+              setAutoAddToList(nextValue);
+              setLastAutoAddToList(nextValue);
+            }}
+          >
+            <Text style={styles.checkboxIcon}>
+              {autoAddToList === true ? '✅' : '⬜'}
+            </Text>
+
+            <Text style={styles.checkboxLabel}>
+              將此菜餚食材自動同步加入「購物清單」
+            </Text>
+          </TouchableOpacity>
+
+          <View style={styles.modalButtonRow}>
+            <TouchableOpacity
+              style={[styles.modalBtn, styles.modalCancelButton]}
+              onPress={() => setRequestModalVisible(false)}
+            >
+              <Text style={styles.modalBtnText}>取消</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.modalBtn, styles.modalPrimaryButton]}
+              onPress={sendRequest}
+            >
+              <Text style={styles.modalBtnText}>🚀 送出建議</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+    </View>
+  </View>
+</Modal>
+
+{/* 收到的點菜要求 Modal */}
+<Modal
+  animationType="slide"
+  transparent={true}
+  visible={requestInboxVisible && incomingRequests.length > 0}
+  onRequestClose={() => setRequestInboxVisible(false)}
+>
+  <View style={styles.modalCentered}>
+    <View style={styles.modalView}>
+      <Text style={styles.modalTitle}>📨 收到的點菜要求</Text>
+
+      {incomingRequests.length === 0 ? (
+        <Text style={styles.label}>目前沒有待處理的點菜要求。</Text>
+      ) : (
+        <ScrollView
+          style={styles.requestInboxScroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          {incomingRequests.map(req => (
+            <View
+              key={req.id}
+              style={styles.requestInboxCard}
+            >
+              <Text style={styles.dishName}>🍲 {req.dishName}</Text>
+
+              <Text style={styles.dishDetails}>
+                來自：{req.senderNickname || '未知用戶'}
+              </Text>
+
+              <Text style={styles.dishDetails}>
+                日期：{req.date}｜餐別：{req.meal}
+              </Text>
+
+              <Text style={styles.dishDetails}>
+                材料：{req.ingredients || '未填寫'}
+              </Text>
+
+              <View style={styles.requestInboxActionArea}>
+                {req.status === 'pending' && (
+                  <TouchableOpacity
+                    style={[styles.requestInboxActionButton, styles.successActionButton]}
+                    onPress={() => handleApproveRequest(req.mergedRequestIds || [req.id])}
+                  >
+                    <Text style={styles.requestInboxActionText}>
+                      ✅ 同意
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  style={[styles.requestInboxActionButton, styles.infoActionButton]}
+                  onPress={() => openRescheduleModal(req)}
+                >
+                  <Text style={styles.requestInboxActionText}>
+                    📅 改期並同意
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.requestInboxActionButton, styles.dangerActionButton]}
+                  onPress={() => openRejectModal(req)}
+                >
+                  <Text style={styles.requestInboxActionText}>
+                    {req.status === 'approved' ? '取消 / 拒絕' : '❌ 拒絕'}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* 大廚同意時，是否把材料加入購物清單 */}
+                <TouchableOpacity
+                  style={styles.checkboxRowCompact}
+                  onPress={() => {
+                    const nextValue = approveAddToList === true ? false : true;
+                    setApproveAddToList(nextValue);
+                    setLastApproveAddToList(nextValue);
+                  }}
+                >
+                  <Text style={styles.checkboxIcon}>
+                    {approveAddToList === true ? '✅' : '⬜'}
+                  </Text>
+
+                  <Text style={styles.checkboxLabel}>
+                    同意後將此菜餚食材加入「購物清單」
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+      )}
+
+      <View style={styles.modalFooterButtonArea}>
+        <Button
+          title="關閉"
+          color="gray"
+          onPress={() => setRequestInboxVisible(false)}
+        />
+      </View>
+    </View>
+  </View>
+</Modal>
+
+{/* 大廚通知 Modal：發起人收到改期 / 拒絕 / 取消通知時彈出 */}
+<Modal
+  animationType="slide"
+  transparent={true}
+  visible={senderNotificationModalVisible && senderNotifications.length > 0}
+  onRequestClose={dismissAllCookMessages}
+>
+  <View style={styles.modalCentered}>
+    <View style={styles.modalView}>
+      <Text style={styles.modalTitle}>📝 大廚通知</Text>
+
+      <ScrollView
+        style={styles.senderNotificationScroll}
+        keyboardShouldPersistTaps="handled"
+      >
+        {senderNotifications.map(req => {
+          const displayCooks = Array.isArray(req.mergedCooks)
+            ? req.mergedCooks.join('、')
+            : (req.targetCookName || req.target || '未知');
+
+          return (
+            <View
+              key={getCookMessageKey(req)}
+              style={styles.senderNotificationCard}
+            >
+              <Text style={styles.dishName}>
+                🍽️ {req.dishName || '未命名菜式'}
+              </Text>
+
+              <Text style={styles.dishDetails}>
+                日期餐次：{req.date || '未定日期'}（{req.meal || '未定餐次'}）
+              </Text>
+
+              <Text style={styles.cookMessageText}>
+                {req.cookMessage}
+              </Text>
+
+              <TouchableOpacity
+                style={styles.acknowledgeButton}
+                onPress={() => dismissOneCookMessage(req)}
+              >
+                <Text style={styles.acknowledgeButtonText}>
+                  知道了
+                </Text>
+              </TouchableOpacity>
+            </View>
+          );
+        })}
+      </ScrollView>
+
+      <View style={styles.modalFooterButtonArea}>
+        <Button
+          title="全部知道了"
+          color="#6c757d"
+          onPress={dismissAllCookMessages}
+        />
+      </View>
+    </View>
+  </View>
+</Modal>
+
+
+{/* 改期 Modal：一定要放在收到的點菜要求 Modal 後面，才會蓋在最上層 */}
+<Modal
+  animationType="slide"
+  transparent={true}
+  visible={rescheduleModalVisible}
+  onRequestClose={() => {
+    if (!isRescheduleSubmitting) {
+      setRescheduleModalVisible(false);
+      setRescheduleTargetId(null);
+      setRescheduleDateInput('');
+    }
+  }}
+>
+  <View style={styles.modalCentered}>
+    <View style={styles.modalView}>
+      <Text style={styles.modalTitle}>📅 修改點菜日期</Text>
+
+      <Text style={styles.label}>新的日期：</Text>
+      <TextInput
+        style={styles.input}
+        value={rescheduleDateInput}
+        onChangeText={setRescheduleDateInput}
+        placeholder="例如：2026-06-15"
+        placeholderTextColor="#B8A89A"
+      />
+
+      <Text style={styles.label}>餐次：</Text>
+
+      {/* 先顯示目前選中的餐次；按一下才展開其他選項 */}
+      <TouchableOpacity
+        style={styles.dropdownHeader}
+        onPress={() => setRescheduleMealOptionsVisible(prev => !prev)}
+      >
+        <Text
+          style={[
+            styles.dropdownHeaderText,
+            !rescheduleMealInput && styles.dropdownPlaceholderText
+          ]}
+        >
+          {rescheduleMealInput
+            ? `${rescheduleMealInput}  ▼`
+            : '請選擇餐次 ▼'}
+        </Text>
+      </TouchableOpacity>
+
+      {/* 展開後，用一排過的選項；包含目前選中的餐次，所以可以點返早餐 */}
+      {rescheduleMealOptionsVisible && (
+        <View style={styles.mealOptionWrap}>
+          {MEAL_OPTIONS.map(meal => {
+            const isSelected = rescheduleMealInput === meal;
+
+            return (
+              <TouchableOpacity
+                key={meal}
+                style={[
+                  styles.mealOptionChip,
+                  isSelected && styles.mealOptionChipSelected
+                ]}
+                onPress={() => {
+                  setRescheduleMealInput(meal);
+                  setRescheduleMealOptionsVisible(false);
+                }}
+              >
+                <Text
+                  style={[
+                    styles.mealOptionChipText,
+                    isSelected && styles.mealOptionChipTextSelected
+                  ]}
+                >
+                  {isSelected ? '✅ ' : ''}
+                  {meal}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+
+      <Text style={styles.label}>給發起人的訊息，可留空：</Text>
+      <TextInput
+        style={styles.input}
+        value={rescheduleReasonInput}
+        onChangeText={setRescheduleReasonInput}
+        placeholder="例如：當日太忙，改到週末比較方便"
+        placeholderTextColor="#B8A89A"
+      />
+
+      <Text style={styles.modalHintText}>
+        如果不填，系統會自動傳送 official 通知。
+      </Text>
+
+      <View style={styles.modalButtonRow}>
+        <Button
+          title="取消"
+          color="gray"
+          disabled={isRescheduleSubmitting}
+          onPress={() => {
+            setRescheduleModalVisible(false);
+            setRescheduleTargetId(null);
+            setRescheduleDateInput('');
+            setRescheduleMealInput('');
+            setRescheduleMealOptionsVisible(false);
+            setRescheduleReasonInput('');
+            setIsRescheduleSubmitting(false);
+          }}
+        />
+
+        <Button
+          title={isRescheduleSubmitting ? '處理中...' : '確認改期'}
+          color="#28a745"
+          disabled={isRescheduleSubmitting}
+          onPress={handleConfirmReschedule}
+        />
+      </View>
+    </View>
+  </View>
+</Modal>
+
+
+{/* 拒絕 / 取消訊息 Modal */}
+<Modal
+  animationType="slide"
+  transparent={true}
+  visible={rejectModalVisible}
+  onRequestClose={() => {
+    setRejectModalVisible(false);
+    setRejectTargetRequest(null);
+    setRejectReasonInput('');
+  }}
+>
+  <View style={styles.modalCentered}>
+    <View style={styles.modalView}>
+      <Text style={styles.modalTitle}>📝 拒絕 / 取消訊息</Text>
+
+      <Text style={styles.label}>給發起人的訊息，可留空：</Text>
+      <TextInput
+        style={styles.input}
+        value={rejectReasonInput}
+        onChangeText={setRejectReasonInput}
+        placeholder="例如：當日沒有時間煮 / 材料不足"
+        placeholderTextColor="#B8A89A"
+      />
+
+      <Text style={styles.modalHintText}>
+        如果不填，系統會自動傳送 official 通知。
+      </Text>
+
+      <View style={styles.modalButtonRow}>
+        <Button
+          title="取消"
+          color="gray"
+          onPress={() => {
+            setRejectModalVisible(false);
+            setRejectTargetRequest(null);
+            setRejectReasonInput('');
+          }}
+        />
+
+        <Button
+          title="確認"
+          color="#dc3545"
+          onPress={handleConfirmRejectRequest}
+        />
+      </View>
+    </View>
+  </View>
+</Modal>
+
+{/* 刪除帳號前重新驗證 Modal */}
+<Modal
+  animationType="slide"
+  transparent={true}
+  visible={deleteAccountModalVisible}
+  onRequestClose={() => {
+    if (isDeletingAccount) return;
+    setDeleteAccountModalVisible(false);
+    setDeleteAccountPasswordInput('');
+  }}
+>
+  <View style={styles.modalCentered}>
+    <View style={styles.modalView}>
+      <Text style={styles.modalTitle}>⚠️ 真的要刪除帳號嗎？</Text>
+
+      <Text style={styles.label}>重新輸入密碼：</Text>
+
+      <TextInput
+        style={styles.input}
+        value={deleteAccountPasswordInput}
+        onChangeText={setDeleteAccountPasswordInput}
+        placeholderTextColor="#B8A89A"
+        secureTextEntry
+      />
+
+      <Text style={styles.modalDangerHintText}>
+        警告：被刪除帳號無法復原。
+      </Text>
+
+      <View style={styles.modalButtonRow}>
+        <Button
+          title="取消"
+          color="gray"
+          disabled={isDeletingAccount}
+          onPress={() => {
+            setDeleteAccountModalVisible(false);
+            setDeleteAccountPasswordInput('');
+          }}
+        />
+
+        <Button
+          title={isDeletingAccount ? '刪除中...' : '確認刪除'}
+          color="#dc3545"
+          disabled={isDeletingAccount}
+          onPress={handleConfirmDeleteMyAccount}
+        />
+      </View>
+    </View>
+  </View>
+</Modal>
+
+
+{/* ================= 底部導覽列 (TabBar) ================= */}
+<View
+  style={[
+    styles.tabBar,
+    {
+      paddingBottom: Math.max(insets.bottom, 12),
+      minHeight: 64 + Math.max(insets.bottom, 12)
+    }
+  ]}
+>
+  <TouchableOpacity
+    style={[
+      styles.tabItem,
+      currentTab === 'home' && styles.tabItemActive
+    ]}
+    onPress={() => {
+      setCustomModalVisible(false);
+      setRequestModalVisible(false);
+      setRescheduleModalVisible(false);
+      setCurrentTab('home');
+    }}
+  >
+    <Text style={styles.tabIcon}>🏠</Text>
+    <Text
+      style={[
+        styles.tabText,
+        currentTab === 'home' && styles.tabTextActive
+      ]}
+    >
+      家庭菜庫
+    </Text>
+  </TouchableOpacity>
+
+  <TouchableOpacity
+    style={[
+      styles.tabItem,
+      currentTab === 'group' && styles.tabItemActive
+    ]}
+    onPress={() => {
+      setCustomModalVisible(false);
+      setRequestModalVisible(false);
+      setRescheduleModalVisible(false);
+      setCurrentTab('group');
+    }}
+  >
+    <Text style={styles.tabIcon}>📅</Text>
+    <Text
+      style={[
+        styles.tabText,
+        currentTab === 'group' && styles.tabTextActive
+      ]}
+    >
+      排餐審核
+    </Text>
+  </TouchableOpacity>
+
+  <TouchableOpacity
+    style={[
+      styles.tabItem,
+      currentTab === 'add' && styles.tabItemActive
+    ]}
+    onPress={() => {
+      setCustomModalVisible(false);
+      setRequestModalVisible(false);
+      setRescheduleModalVisible(false);
+      setCurrentTab('add');
+    }}
+  >
+    <Text style={styles.tabIcon}>➕</Text>
+    <Text
+      style={[
+        styles.tabText,
+        currentTab === 'add' && styles.tabTextActive
+      ]}
+    >
+      加新菜
+    </Text>
+  </TouchableOpacity>
+
+  <TouchableOpacity
+    style={[
+      styles.tabItem,
+      currentTab === 'shopping' && styles.tabItemActive
+    ]}
+    onPress={() => {
+      setCustomModalVisible(false);
+      setRequestModalVisible(false);
+      setRescheduleModalVisible(false);
+      setCurrentTab('shopping');
+    }}
+  >
+    <Text style={styles.tabIcon}>🛒</Text>
+    <Text
+      style={[
+        styles.tabText,
+        currentTab === 'shopping' && styles.tabTextActive
+      ]}
+    >
+      採買清單
+    </Text>
+  </TouchableOpacity>
+
+  <TouchableOpacity
+    style={[
+      styles.tabItem,
+      currentTab === 'profile' && styles.tabItemActive
+    ]}
+    onPress={() => {
+      setCustomModalVisible(false);
+      setRequestModalVisible(false);
+      setRescheduleModalVisible(false);
+      setCurrentTab('profile');
+    }}
+  >
+    <Text style={styles.tabIcon}>👤</Text>
+    <Text
+      style={[
+        styles.tabText,
+        currentTab === 'profile' && styles.tabTextActive
+      ]}
+    >
+      設定
+    </Text>
+  </TouchableOpacity>
+</View>
+
+    </View>
+      </SafeAreaView>
+  );
+}
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppContent />
+    </SafeAreaProvider>
+  );
+}
+
+{/* ================= 樣式表 StyleSheet ================= */}
+{/* ================= 樣式表 StyleSheet ================= */}
+const styles = StyleSheet.create({
+  // =====================
+  // 基礎版面
+  // =====================
+safeRoot: {
+  flex: 1,
+  backgroundColor: '#FFF8F0'
+},
+
+  container: {
+    flex: 1,
+    backgroundColor: '#FFF8F0'
+  },
+
+  containerCenter: {
+    flexGrow: 1,
+    backgroundColor: '#FFF8F0',
+    paddingHorizontal: 18,
+    justifyContent: 'center'
+  },
+
+  content: {
+    flex: 1,
+    padding: 15,
+    backgroundColor: '#FFF8F0'
+  },
+
+  pageContent: {
+    paddingBottom: 12
+  },
+
+  authScreen: {
+    flex: 1,
+    backgroundColor: '#FFF8F0'
+  },
+
+  authScroll: {
+    flex: 1,
+    backgroundColor: '#FFF8F0'
+  },
+
+  authContainer: {
+    flexGrow: 1,
+    paddingHorizontal: 18,
+    justifyContent: 'center'
+  },
+
+  authTitleArea: {
+    alignItems: 'center',
+    marginBottom: 18
+  },
+
+  // =====================
+  // Header
+  // =====================
+header: {
+  backgroundColor: '#FF8A65',
+  paddingHorizontal: 14,
+  marginBottom: 12,
+  borderRadius: 14
+},
+
+headerInner: {
+  paddingVertical: 8,
+  alignItems: 'center',
+  justifyContent: 'center'
+},
+
+headerTitle: {
+  fontSize: 18,
+  fontWeight: 'bold',
+  color: '#fff',
+  textAlign: 'center'
+},
+
+  // =====================
+  // 標題文字
+  // =====================
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#4A3B32',
+    marginVertical: 10
+  },
+
+  sectionTitleSmall: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#5A4A42',
+    marginBottom: 10
+  },
+
+  sectionTitleLarge: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#4A3B32',
+    marginBottom: 16,
+    textAlign: 'center'
+  },
+
+  sectionTitleBlock: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FF7043',
+    marginBottom: 12
+  },
+
+  label: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#5A4A42',
+    marginBottom: 6,
+    marginTop: 6
+  },
+
+  // =====================
+  // 卡片 / 表單
+  // =====================
+  searchSectionCard: {
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    borderRadius: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2
+  },
+
+  formCard: {
+    backgroundColor: '#FFFFFF',
+    padding: 18,
+    borderRadius: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2
+  },
+
+  innerCard: {
+    backgroundColor: '#FFF8F0',
+    padding: 14,
+    borderRadius: 14,
+    marginTop: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  loginBox: {
+    backgroundColor: '#FFFFFF',
+    padding: 18,
+    borderRadius: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  setupCard: {
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    borderRadius: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2
+  },
+
+  cardTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#4A3B32',
+    marginBottom: 10
+  },
+
+  input: {
+    backgroundColor: '#FFF7EC',
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    borderRadius: 12,
+    fontSize: 14,
+    marginBottom: 10,
+    color: '#3F332C',
+    borderWidth: 1,
+    borderColor: '#F2DDC8'
+  },
+
+  // =====================
+  // 通用按鈕語意色
+  // =====================
+  primaryActionButton: {
+    backgroundColor: '#FF8A65'
+  },
+
+  manageActionButton: {
+    backgroundColor: '#9254DE'
+  },
+
+  luckyActionButton: {
+    backgroundColor: '#B45ACB'
+  },
+
+  infoActionButton: {
+    backgroundColor: '#3BB8B8'
+  },
+
+  successActionButton: {
+    backgroundColor: '#58B368'
+  },
+
+  completeActionButton: {
+    backgroundColor: '#58B368'
+  },
+
+  restoreActionButton: {
+    backgroundColor: '#58B368'
+  },
+
+  warningActionButton: {
+    backgroundColor: '#FAAD14'
+  },
+
+  dangerActionButton: {
+    backgroundColor: '#E85D75'
+  },
+
+  neutralActionButton: {
+    backgroundColor: '#A89A8E'
+  },
+
+  clearActionButton: {
+    backgroundColor: '#A89A8E'
+  },
+
+  cancelActionButton: {
+    backgroundColor: '#A89A8E'
+  },
+
+  disabledActionButton: {
+    backgroundColor: '#D8CEC3'
+  },
+
+  softCancelButton: {
+    backgroundColor: '#8FA6B2',
+    borderWidth: 1,
+    borderColor: '#D8C5B3'
+  },
+
+  softCancelButtonText: {
+    color: '#6F6258',
+    fontWeight: 'bold'
+  },
+
+  buttonTextWhite: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  buttonTextDark: {
+    color: '#6F6258',
+    fontWeight: 'bold'
+  },
+
+  buttonTextDanger: {
+    color: '#E85D75',
+    fontWeight: 'bold'
+  },
+
+  buttonTextSuccess: {
+    color: '#58B368',
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 登入 / 註冊 / 主按鈕
+  // =====================
+  mainActionBtn: {
+    width: '100%',
+    paddingVertical: 15,
+    borderRadius: 14,
+    backgroundColor: '#3BB8B8',
+    alignItems: 'center',
+    marginTop: 12
+  },
+
+  mainActionBtnAlt: {
+    width: '100%',
+    paddingVertical: 15,
+    borderRadius: 14,
+    backgroundColor: '#3BB8B8',
+    alignItems: 'center',
+    marginTop: 12
+  },
+
+  mainActionText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold'
+  },
+
+  switchStageLink: {
+    marginTop: 14,
+    alignItems: 'center'
+  },
+
+  switchStageText: {
+    color: '#FF7043',
+    fontSize: 14,
+    fontWeight: '600'
+  },
+switchToRegisterText: {
+  color: '#3BB8B8',
+  fontSize: 14,
+  textDecorationLine: 'underline'
+},
+
+switchToLoginText: {
+  color: '#3BB8B8',
+  fontSize: 14,
+  textDecorationLine: 'underline'
+},
+  primaryButton: {
+    backgroundColor: '#3BB8B8',
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+    marginTop: 8
+  },
+
+  buttonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 抽籤按鈕
+  // =====================
+  luckyDrawButton: {
+    backgroundColor: '#B45ACB',
+    paddingVertical: 15,
+    paddingHorizontal: 16,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3
+  },
+
+  luckyDrawButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center'
+  },
+
+  // =====================
+  // 首頁 toolbar / action buttons
+  // =====================
+  toolbarRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12
+  },
+
+  smallActionButton: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    alignItems: 'center'
+  },
+
+  smallActionButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 分類 / 標籤
+  // =====================
+  categoryBlock: {
+    borderBottomWidth: 1,
+    borderColor: '#F4E5D8',
+    paddingVertical: 9
+  },
+
+  accordionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+
+  categoryLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#4A3B32'
+  },
+
+  searchHintText: {
+    fontSize: 12,
+    color: '#9B8A7D'
+  },
+
+  categoryContent: {
+    marginTop: 6
+  },
+
+  subCategoryBlock: {
+    marginLeft: 10,
+    marginTop: 6
+  },
+
+  subCategoryLabel: {
+    fontSize: 12,
+    color: '#7A6B60',
+    fontWeight: '600',
+    marginBottom: 4
+  },
+
+  tagContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginVertical: 6
+  },
+
+  tagButtonBig: {
+    backgroundColor: '#FFF7EC',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    marginRight: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#F2DDC8'
+  },
+
+  tagButtonSelected: {
+    backgroundColor: '#FF8A65',
+    borderColor: '#FF8A65'
+  },
+
+  tagTextBig: {
+    fontSize: 12,
+    color: '#4A3B32'
+  },
+
+  // =====================
+  // 家庭菜餚庫
+  // =====================
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+    marginBottom: 6
+  },
+
+  editToggleButton: {
+    backgroundColor: '#FAAD14',
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 12
+  },
+
+  editToggleButtonActive: {
+    backgroundColor: '#58B368'
+  },
+
+  editToggleButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 12
+  },
+
+  editToolbar: {
+    backgroundColor: '#FFF7EC',
+    padding: 12,
+    borderRadius: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#F2DDC8'
+  },
+
+  editToolbarHint: {
+    fontSize: 12,
+    color: '#7A6B60',
+    marginBottom: 8
+  },
+
+  editToolbarButtonGroup: {
+    marginTop: 4
+  },
+
+  editToolbarRow: {
+    flexDirection: 'row'
+  },
+
+  editMainActionButton: {
+    flex: 1,
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center'
+  },
+
+  editMainActionText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  clearSelectionButton: {
+    backgroundColor: '#A89A8E',
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    minWidth: 80
+  },
+
+  clearSelectionText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  hiddenManageButton: {
+    backgroundColor: '#9254DE',
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 10
+  },
+
+  hiddenManageButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  dishCardSelectable: {
+    backgroundColor: '#FFFFFF',
+    padding: 15,
+    borderRadius: 18,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2
+  },
+
+  dishCardSelected: {
+    borderWidth: 2,
+    borderColor: '#3BB8B8',
+    backgroundColor: '#F0FDFA'
+  },
+
+  dishCardRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start'
+  },
+
+  dishCardContent: {
+    flex: 1
+  },
+
+  dishCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start'
+  },
+
+  dishName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#3F332C',
+    flexShrink: 1
+  },
+
+  dishDetails: {
+    fontSize: 13,
+    color: '#6F6258',
+    marginTop: 6,
+    lineHeight: 19
+  },
+
+  clickHint: {
+    fontSize: 12,
+    color: '#FF7043',
+    marginTop: 8,
+    fontWeight: 'bold'
+  },
+
+  dishStatusText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    marginLeft: 8
+  },
+
+  dishStatusApproved: {
+    color: '#58B368'
+  },
+
+  dishStatusPending: {
+    color: '#FAAD14'
+  },
+
+  dishStatusPrivate: {
+    color: '#1890FF'
+  },
+
+  checkboxBox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#B8A89A',
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+    marginTop: 2
+  },
+
+  checkboxBoxSelected: {
+    borderColor: '#3BB8B8',
+    backgroundColor: '#3BB8B8'
+  },
+
+  checkboxTick: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 16,
+    lineHeight: 18
+  },
+
+  // =====================
+  // 月曆
+  // =====================
+  monthSwitcherRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15
+  },
+
+  switchMonthText: {
+    color: '#FF7043',
+    fontWeight: 'bold'
+  },
+
+  monthTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#4A3B32'
+  },
+
+  calendarContainer: {
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    borderRadius: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  calendarHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 6
+  },
+
+  calendarHeaderCell: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#9B8A7D',
+    width: '14%',
+    textAlign: 'center'
+  },
+
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap'
+  },
+
+  calendarCell: {
+    width: '14.28%',
+    height: 45,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginVertical: 2,
+    borderRadius: 10
+  },
+
+  calendarCellEmpty: {
+    width: '14.28%',
+    height: 45
+  },
+
+  calendarCellToday: {
+    backgroundColor: '#FFF0E8',
+    borderWidth: 1,
+    borderColor: '#FF8A65'
+  },
+
+  calendarCellApproved: {
+    backgroundColor: '#58B368'
+  },
+
+  calendarCellCompleted: {
+    backgroundColor: '#A89A8E'
+  },
+
+  calendarCellPast: {
+    backgroundColor: '#EFE7DD',
+    opacity: 0.65
+  },
+
+  calendarDayNum: {
+    fontSize: 14,
+    color: '#3F332C'
+  },
+
+  calendarDayNumHasEvent: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  calendarDayNumToday: {
+    color: '#FF7043',
+    fontWeight: 'bold'
+  },
+
+  calendarDayNumPast: {
+    color: '#AAA'
+  },
+
+  calendarDotWhite: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#fff',
+    marginTop: 2
+  },
+
+  dotMini: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#fff',
+    marginTop: 2
+  },
+
+  // =====================
+  // 排餐 request card
+  // =====================
+  requestCard: {
+    backgroundColor: '#FFFFFF',
+    padding: 15,
+    borderRadius: 18,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  requestCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+
+  requestMetaText: {
+    marginTop: 6,
+    color: '#4A3B32',
+    fontSize: 13
+  },
+
+  requestMetaTextBottom: {
+    marginTop: 4,
+    marginBottom: 8,
+    color: '#4A3B32',
+    fontSize: 13
+  },
+
+  requestMetaStrong: {
+    fontWeight: 'bold'
+  },
+
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    fontSize: 12,
+    overflow: 'hidden',
+    fontWeight: 'bold'
+  },
+
+  statusBadgeApproved: {
+    backgroundColor: '#EAF8EE',
+    color: '#58B368'
+  },
+
+  statusBadgeRejected: {
+    backgroundColor: '#FFF1F0',
+    color: '#E85D75'
+  },
+
+  statusBadgePending: {
+    backgroundColor: '#FFF7E6',
+    color: '#FA8C16'
+  },
+
+  timeHighlight: {
+    color: '#FF7043',
+    fontWeight: 'bold'
+  },
+
+  actionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 10
+  },
+
+  actionBtn: {
+    flex: 1,
+    padding: 8,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginHorizontal: 3
+  },
+
+  actionBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 13
+  },
+
+  waitingReviewText: {
+    fontSize: 12,
+    color: '#9B8A7D',
+    fontStyle: 'italic',
+    marginTop: 6
+  },
+
+  // =====================
+  // 新增菜式
+  // =====================
+  recommendBox: {
+    backgroundColor: '#FFF1F0',
+    padding: 10,
+    borderRadius: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#FFD6D0'
+  },
+
+  recommendWarningText: {
+    color: '#E85D75',
+    fontSize: 12,
+    fontWeight: 'bold'
+  },
+
+  recommendItemText: {
+    fontSize: 12,
+    color: '#6F6258',
+    marginTop: 2
+  },
+
+  formSectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 6
+  },
+
+  inlineManageButton: {
+    backgroundColor: '#3BB8B8',
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 10
+  },
+
+  inlineManageButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold'
+  },
+
+  addCategoryBlock: {
+    marginBottom: 8
+  },
+
+  addSubCategoryBlock: {
+    marginLeft: 10,
+    marginBottom: 5
+  },
+
+  miniCategoryLabel: {
+    fontSize: 11,
+    color: '#9B8A7D',
+    fontWeight: 'bold'
+  },
+
+  miniSelectBtn: {
+    backgroundColor: '#FFF7EC',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    marginRight: 6,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#F2DDC8'
+  },
+
+  miniSelectBtnActive: {
+    backgroundColor: '#FF8A65',
+    borderColor: '#FF8A65'
+  },
+
+  miniSelectBtnText: {
+    fontSize: 11,
+    color: '#4A3B32'
+  },
+
+  miniSelectBtnTextActive: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  permissionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between'
+  },
+
+  permissionRowSpaced: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 15
+  },
+
+  permBtn: {
+    flex: 1,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#F2DDC8',
+    borderRadius: 12,
+    alignItems: 'center',
+    marginHorizontal: 5,
+    backgroundColor: '#FFF7EC'
+  },
+
+  permBtnActive: {
+    borderColor: '#FF8A65',
+    backgroundColor: '#FFF0E8'
+  },
+
+  permBtnText: {
+    fontSize: 13,
+    color: '#4A3B32',
+    fontWeight: '600'
+  },
+
+  submitDishBtn: {
+    backgroundColor: '#58B368',
+    padding: 15,
+    borderRadius: 14,
+    alignItems: 'center',
+    marginTop: 15
+  },
+
+  submitDishBtnText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 購物清單
+  // =====================
+  shoppingInputRow: {
+    flexDirection: 'row',
+    marginBottom: 10
+  },
+
+  shoppingInput: {
+    flex: 1,
+    marginBottom: 0
+  },
+
+  confirmBtnReal: {
+    backgroundColor: '#3BB8B8',
+    justifyContent: 'center',
+    paddingHorizontal: 15,
+    borderRadius: 12,
+    marginLeft: 6
+  },
+
+  confirmBtnRealText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  emptyShoppingText: {
+    textAlign: 'center',
+    color: '#9B8A7D',
+    marginVertical: 20
+  },
+
+  shoppingItemRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderColor: '#F4E5D8',
+    alignItems: 'center'
+  },
+
+  shoppingItemMain: {
+    flex: 1
+  },
+
+  shoppingItemText: {
+    color: '#3F332C',
+    fontSize: 14
+  },
+
+  shoppingItemTextChecked: {
+    textDecorationLine: 'line-through',
+    color: '#9B8A7D'
+  },
+
+  shoppingDeleteButton: {
+    paddingLeft: 10
+  },
+
+  shoppingDeleteText: {
+    color: '#58B368',
+    fontSize: 16
+  },
+
+  // =====================
+  // 個人設定 / 成員
+  // =====================
+  profileText: {
+    fontSize: 15,
+    marginVertical: 6,
+    color: '#3F332C'
+  },
+
+  profileHighlightText: {
+    fontWeight: 'bold',
+    color: '#FF7043'
+  },
+
+  profileStrongText: {
+    fontWeight: 'bold',
+    color: '#3F332C'
+  },
+
+  profileEditButton: {
+    backgroundColor: '#3BB8B8',
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+    marginTop: 8
+  },
+
+  profileEditButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  formButtonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 15
+  },
+
+  groupCodeText: {
+    fontSize: 12,
+    color: '#7A6B60',
+    marginBottom: 10
+  },
+
+  memberRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  memberInfoArea: {
+    flex: 1
+  },
+
+  memberActionArea: {
+    alignItems: 'flex-end'
+  },
+
+  memberNameText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#3F332C'
+  },
+
+  memberRoleText: {
+    fontSize: 12,
+    color: '#7A6B60',
+    marginTop: 2
+  },
+
+  memberRoleCookText: {
+    color: '#58B368',
+    fontWeight: 'bold'
+  },
+
+  memberGroupRoleText: {
+    fontSize: 12,
+    color: '#B8A89A',
+    fontStyle: 'italic',
+    marginBottom: 6
+  },
+
+  deleteMemberBtn: {
+    backgroundColor: '#FFF1F0',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FFD6D0',
+    marginBottom: 6
+  },
+
+  deleteMemberBtnText: {
+    color: '#E85D75',
+    fontSize: 12,
+    fontWeight: '600'
+  },
+
+  memberAdminToggleOffButton: {
+    backgroundColor: '#F0F0F0',
+    borderColor: '#D9D9D9'
+  },
+
+  memberAdminToggleOnButton: {
+    backgroundColor: '#E6FFFB',
+    borderColor: '#87E8DE'
+  },
+
+  logoutButton: {
+    width: '100%',
+    paddingVertical: 15,
+    borderRadius: 14,
+    backgroundColor: '#E85D75',
+    alignItems: 'center',
+    marginTop: 12
+  },
+
+  deleteAccountButton: {
+    width: '100%',
+    paddingVertical: 15,
+    borderRadius: 14,
+    backgroundColor: '#A89A8E',
+    alignItems: 'center',
+    marginTop: 12
+  },
+
+  // =====================
+  // 角色 / 群組 setup
+  // =====================
+  roleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between'
+  },
+
+  roleSelectBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F2DDC8',
+    alignItems: 'center',
+    marginHorizontal: 5,
+    backgroundColor: '#FFF7EC'
+  },
+
+  roleSelectBtnActive: {
+    borderColor: '#FF8A65',
+    backgroundColor: '#FFF0E8'
+  },
+
+  roleBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4A3B32'
+  },
+
+  // =====================
+  // Modal 基礎
+  // =====================
+  modalCentered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(63, 51, 44, 0.45)'
+  },
+
+  modalView: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    width: '86%',
+    maxHeight: '88%',
+    alignItems: 'center',
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    color: '#3F332C',
+    textAlign: 'center'
+  },
+
+  modalContentFull: {
+    width: '100%'
+  },
+
+  modalStrongText: {
+    fontWeight: 'bold',
+    color: '#3F332C'
+  },
+
+  modalDescriptionText: {
+    fontSize: 13,
+    color: '#6F6258',
+    marginBottom: 10,
+    lineHeight: 20
+  },
+
+  modalDangerHintText: {
+    fontSize: 12,
+    color: '#E85D75',
+    marginTop: 6,
+    lineHeight: 18
+  },
+
+  modalHintText: {
+    fontSize: 12,
+    color: '#9B8A7D',
+    marginTop: 4,
+    lineHeight: 18
+  },
+
+  modalButtonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 15,
+    width: '100%'
+  },
+
+  modalBtn: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginHorizontal: 5
+  },
+
+  modalBtnText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  modalCancelButton: {
+    backgroundColor: '#A89A8E'
+  },
+
+  modalPrimaryButton: {
+    backgroundColor: '#FF8A65'
+  },
+
+  modalFooterButtonArea: {
+    marginTop: 12,
+    width: '100%'
+  },
+
+  emptyModalText: {
+    fontSize: 14,
+    color: '#7A6B60',
+    marginTop: 10,
+    textAlign: 'center'
+  },
+
+  // =====================
+  // Dropdown / checkbox
+  // =====================
+  dropdownHeader: {
+    backgroundColor: '#FFF7EC',
+    padding: 11,
+    borderRadius: 12,
+    width: '100%',
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#F2DDC8'
+  },
+
+  dropdownHeaderText: {
+    fontSize: 14,
+    color: '#3F332C'
+  },
+
+  dropdownPlaceholderText: {
+    color: '#9B8A7D'
+  },
+
+  dropdownList: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    borderRadius: 12,
+    width: '100%',
+    marginBottom: 10,
+    overflow: 'hidden'
+  },
+
+  dropdownItem: {
+    padding: 11,
+    borderBottomWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  dropdownItemText: {
+    fontSize: 14,
+    color: '#3F332C'
+  },
+
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 15
+  },
+
+  checkboxRowCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    marginBottom: 4
+  },
+
+  checkboxIcon: {
+    fontSize: 16
+  },
+
+  checkboxLabel: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#5A4A42',
+    flex: 1
+  },
+
+  // =====================
+  // 已隱藏菜式 Modal
+  // =====================
+  hiddenDishesModalView: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    width: '86%',
+    maxHeight: '85%',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  hiddenDishesScroll: {
+    width: '100%',
+    maxHeight: 420
+  },
+
+  hiddenDishCard: {
+    borderWidth: 1,
+    borderColor: '#D9F7BE',
+    backgroundColor: '#FCFFF5',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10
+  },
+
+  restoreDishButton: {
+    backgroundColor: '#58B368',
+    padding: 9,
+    borderRadius: 12,
+    marginTop: 9,
+    alignItems: 'center'
+  },
+
+  restoreDishButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 收到點菜 / 大廚通知
+  // =====================
+  requestInboxScroll: {
+    width: '100%',
+    maxHeight: 360
+  },
+
+  requestInboxCard: {
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    backgroundColor: '#fff'
+  },
+
+  requestInboxActionArea: {
+    marginTop: 10
+  },
+
+  requestInboxActionButton: {
+    padding: 10,
+    borderRadius: 12,
+    marginBottom: 8,
+    alignItems: 'center'
+  },
+
+  requestInboxActionText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  senderNotificationScroll: {
+    width: '100%',
+    maxHeight: 360
+  },
+
+  senderNotificationCard: {
+    borderWidth: 1,
+    borderColor: '#FFE58F',
+    backgroundColor: '#FFFBE6',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10
+  },
+
+  cookMessageText: {
+    fontSize: 13,
+    color: '#5A4A42',
+    marginTop: 12,
+    lineHeight: 22
+  },
+
+  acknowledgeButton: {
+    backgroundColor: '#58B368',
+    padding: 9,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 10
+  },
+
+  acknowledgeButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 改期 meal chips
+  // =====================
+  mealOptionWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10
+  },
+
+  mealOptionChip: {
+    backgroundColor: '#EFE7DD',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    marginRight: 8,
+    marginBottom: 8
+  },
+
+  mealOptionChipSelected: {
+    backgroundColor: '#3BB8B8'
+  },
+
+  mealOptionChipText: {
+    color: '#4A3B32',
+    fontWeight: 'bold'
+  },
+
+  mealOptionChipTextSelected: {
+    color: '#fff'
+  },
+
+  // =====================
+  // Bottom Sheet 管理標籤
+  // =====================
+  bottomSheetOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(63, 51, 44, 0.45)',
+    justifyContent: 'flex-end'
+  },
+
+  bottomSheetContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    maxHeight: '86%',
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  bottomSheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 18,
+    borderBottomWidth: 1,
+    borderColor: '#F4E5D8',
+    paddingBottom: 10
+  },
+
+  bottomSheetTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#3F332C'
+  },
+
+  bottomSheetCloseButton: {
+    padding: 5
+  },
+
+  bottomSheetCloseText: {
+    fontSize: 20,
+    color: '#9B8A7D',
+    fontWeight: 'bold'
+  },
+
+  bottomSheetScroll: {
+    width: '100%'
+  },
+
+  tagManagerSection: {
+    marginBottom: 20,
+    padding: 12,
+    backgroundColor: '#FFF8F0',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  tagManagerSectionTitleBlue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#13A8A8',
+    marginBottom: 8
+  },
+
+  tagManagerSectionTitlePink: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#E85D75',
+    marginBottom: 8
+  },
+
+  modalCategoryPickerArea: {
+    marginTop: 12
+  },
+
+  modalSmallHintText: {
+    fontSize: 12,
+    color: '#6F6258',
+    marginBottom: 8
+  },
+
+  modalCategoryChipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap'
+  },
+
+  modalCategoryChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#F2DDC8',
+    borderRadius: 10,
+    marginRight: 8,
+    marginBottom: 8,
+    backgroundColor: '#fff'
+  },
+
+  modalCategoryChipSelected: {
+    backgroundColor: '#E85D75',
+    borderColor: '#E85D75'
+  },
+
+  modalCategoryChipText: {
+    fontSize: 12,
+    color: '#4A3B32'
+  },
+
+  modalCategoryChipTextSelected: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+moreCategoryToggleButton: {
+  paddingHorizontal: 12,
+  paddingVertical: 7,
+  backgroundColor: '#D99A5C',
+  borderRadius: 18,
+  marginRight: 8,
+  marginBottom: 8,
+  alignItems: 'center',
+  justifyContent: 'center'
+},
+
+moreCategoryToggleText: {
+  fontSize: 12,
+  color: '#fff',
+  fontWeight: 'bold'
+},
+
+  modalSubCategoryBox: {
+    marginTop: 8,
+    padding: 8,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  modalSubCategoryHint: {
+    fontSize: 11,
+    color: '#8C7C70',
+    marginBottom: 6
+  },
+
+  modalSubCategoryChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: '#F2DDC8',
+    borderRadius: 8,
+    marginRight: 6,
+    marginBottom: 6,
+    backgroundColor: '#FFF7EC'
+  },
+
+  modalSubCategoryChipSelected: {
+    backgroundColor: '#FA8C16',
+    borderColor: '#FA8C16'
+  },
+
+  modalSubCategoryChipText: {
+    fontSize: 11,
+    color: '#6F6258'
+  },
+
+  modalSubCategoryChipTextSelected: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+bottomSheetCancelButton: {
+  flex: 1,
+  backgroundColor: '#A89A8E',
+  padding: 12,
+  borderRadius: 14,
+  alignItems: 'center',
+  marginRight: 10
+},
+
+bottomSheetCancelButtonText: {
+  color: '#fff',
+  fontWeight: 'bold',
+  fontSize: 14
+},
+
+  modalCancelButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  modalSaveButton: {
+    flex: 2,
+    backgroundColor: '#58B368',
+    padding: 12,
+    borderRadius: 14,
+    alignItems: 'center'
+  },
+
+  modalSaveButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 15
+  },
+
+  customEditSection: {
+    marginTop: 8,
+    marginBottom: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#F4E5D8',
+    paddingTop: 12
+  },
+
+  customEditToggleButton: {
+    backgroundColor: '#FAAD14',
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 10
+  },
+
+  customEditToggleButtonActive: {
+    backgroundColor: '#9254DE'
+  },
+
+  customEditToggleText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  customEditHintText: {
+    fontSize: 13,
+    color: '#6F6258',
+    marginBottom: 8,
+    lineHeight: 20
+  },
+
+  customCategoryTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#13A8A8',
+    marginTop: 8,
+    marginBottom: 6
+  },
+
+  customTagTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#E85D75',
+    marginTop: 14,
+    marginBottom: 6
+  },
+
+  customEmptyText: {
+    fontSize: 13,
+    color: '#9B8A7D',
+    fontStyle: 'italic',
+    marginBottom: 8
+  },
+
+  customManageRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F4E5D8'
+  },
+
+  customManageRowMain: {
+    flex: 1,
+    marginRight: 8
+  },
+
+  customManageNameText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#3F332C'
+  },
+
+  customManageMetaText: {
+    fontSize: 11,
+    color: '#7A6B60',
+    marginTop: 2
+  },
+
+  customManageStateText: {
+    fontSize: 12,
+    color: '#9B8A7D'
+  },
+
+  customManageStateTextSelected: {
+    color: '#E85D75',
+    fontWeight: 'bold'
+  },
+
+  bulkDeleteButton: {
+    backgroundColor: '#E85D75',
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 14
+  },
+
+  bulkDeleteButtonDisabled: {
+    backgroundColor: '#D8CEC3'
+  },
+
+  bulkDeleteButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  finishEditButton: {
+    backgroundColor: '#58B368',
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 10
+  },
+
+  finishEditButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // TabBar
+  // =====================
+  tabBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#F4E5D8',
+    paddingTop: 6,
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: -2 },
+    zIndex: 999
+  },
+
+  tabItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginHorizontal: 2
+  },
+
+  tabItemActive: {
+    backgroundColor: '#FFF0E8'
+  },
+
+  tabIcon: {
+    fontSize: 20,
+    marginBottom: 2
+  },
+
+  tabText: {
+    fontSize: 11,
+    color: '#7A6B60'
+  },
+
+  tabTextActive: {
+    color: '#FF7043',
+    fontWeight: 'bold'
+  },
+  profileInfoBox: {
+  backgroundColor: '#FFF8F0',
+  borderWidth: 1,
+  borderColor: '#F4E5D8',
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 12
+},
+
+profileEditButtonRow: {
+  flexDirection: 'row',
+  marginTop: 14
+},
+
+profileCancelButton: {
+  flex: 1,
+  backgroundColor: '#A89A8E',
+  paddingVertical: 12,
+  borderRadius: 14,
+  alignItems: 'center',
+  marginRight: 8
+},
+
+profileCancelButtonText: {
+  color: '#fff',
+  fontWeight: 'bold'
+},
+
+profileSaveButton: {
+  flex: 2,
+  backgroundColor: '#58B368',
+  paddingVertical: 12,
+  borderRadius: 14,
+  alignItems: 'center'
+},
+
+profileSaveButtonText: {
+  color: '#fff',
+  fontWeight: 'bold'
+},
+
+memberCard: {
+  backgroundColor: '#FFF8F0',
+  borderWidth: 1,
+  borderColor: '#F4E5D8',
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 10
+},
+
+memberTopRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start'
+},
+
+memberButtonRow: {
+  flexDirection: 'row',
+  marginTop: 10
+},
+
+memberSmallButton: {
+  flex: 1,
+  paddingVertical: 8,
+  borderRadius: 12,
+  alignItems: 'center',
+  marginRight: 8,
+  borderWidth: 1
+},
+
+memberSmallButtonText: {
+  fontSize: 12,
+  fontWeight: 'bold',
+  color: '#3F332C'
+},
+
+memberRemoveButton: {
+  backgroundColor: '#FFF1F0',
+  borderColor: '#FFD6D0',
+  marginRight: 0
+},
+
+memberRemoveButtonText: {
+  fontSize: 12,
+  fontWeight: 'bold',
+  color: '#E85D75'
+},
+profileSectionHeaderRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  marginBottom: 8
+},
+
+profileInfoBox: {
+  backgroundColor: '#FFF8F0',
+  borderWidth: 1,
+  borderColor: '#F4E5D8',
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 12
+},
+
+profileEditButtonRow: {
+  flexDirection: 'row',
+  marginTop: 14
+},
+
+profileCancelButton: {
+  flex: 1,
+  backgroundColor: '#A89A8E',
+  paddingVertical: 12,
+  borderRadius: 14,
+  alignItems: 'center',
+  marginRight: 8
+},
+
+profileCancelButtonText: {
+  color: '#fff',
+  fontWeight: 'bold'
+},
+
+profileSaveButton: {
+  flex: 2,
+  backgroundColor: '#58B368',
+  paddingVertical: 12,
+  borderRadius: 14,
+  alignItems: 'center'
+},
+
+profileSaveButtonText: {
+  color: '#fff',
+  fontWeight: 'bold'
+},
+
+groupCodeCopyBox: {
+  backgroundColor: '#FFF7EC',
+  borderWidth: 1,
+  borderColor: '#F2DDC8',
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 12
+},
+
+memberManageToggleButton: {
+  backgroundColor: '#FAAD14',
+  paddingVertical: 7,
+  paddingHorizontal: 12,
+  borderRadius: 12
+},
+
+memberManageToggleButtonActive: {
+  backgroundColor: '#58B368'
+},
+
+memberManageToggleButtonText: {
+  color: '#fff',
+  fontSize: 12,
+  fontWeight: 'bold'
+},
+
+memberCard: {
+  backgroundColor: '#FFF8F0',
+  borderWidth: 1,
+  borderColor: '#F4E5D8',
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 10
+},
+
+memberTopRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start'
+},
+
+memberButtonRow: {
+  flexDirection: 'row',
+  marginTop: 10
+},
+
+memberSmallButton: {
+  flex: 1,
+  paddingVertical: 8,
+  borderRadius: 12,
+  alignItems: 'center',
+  marginRight: 8,
+  borderWidth: 1
+},
+
+memberSmallButtonText: {
+  fontSize: 12,
+  fontWeight: 'bold',
+  color: '#3F332C'
+},
+
+memberRemoveButton: {
+  backgroundColor: '#FFF1F0',
+  borderColor: '#FFD6D0',
+  marginRight: 0
+},
+
+memberRemoveButtonText: {
+  fontSize: 12,
+  fontWeight: 'bold',
+  color: '#E85D75'
+}
+});
