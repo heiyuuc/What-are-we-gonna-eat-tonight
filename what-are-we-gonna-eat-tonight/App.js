@@ -1,22 +1,14 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { StatusBar, StyleSheet, Text, View, ScrollView, TouchableOpacity, TextInput, Modal, Button, Alert, KeyboardAvoidingView, Platform } from 'react-native';
-import { SafeAreaProvider, useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
-import { db, registerWithEmail, loginWithEmail, setAuthToken, clearAuthToken, deleteCurrentAccount, reauthenticateCurrentUser} from './firebase';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { db, registerWithEmail, loginWithEmail, setAuthToken, clearAuthToken, deleteCurrentAccount, reauthenticateCurrentUser } from './firebase';
 import * as Clipboard from 'expo-clipboard';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 function AppContent() {
 
   const insets = useSafeAreaInsets();
-//login
-const SAVED_LOGIN_KEY = 'what_are_we_gonna_eat_saved_login_v1';
 
-
-// 流程導航: 'login' -> 'register' -> 'group_setup' -> 'main'
-const [appStage, setAppStage] = useState('login');
-
-// 用途：App 開啟時，先檢查手機是否已有登入紀錄
-const [isCheckingSavedLogin, setIsCheckingSavedLogin] = useState(true);
-
+  // 流程導航: 'login' -> 'register' -> 'group_setup' -> 'main'
+  const [appStage, setAppStage] = useState('login');
   // 主App分頁: 'home', 'group', 'add', 'profile'
   const [currentTab, setCurrentTab] = useState('home');
   const CURRENT_DATE = new Date();
@@ -51,118 +43,8 @@ const [selectedDishIdsForHide, setSelectedDishIdsForHide] = useState([]);
   const [editNickname, setEditNickname] = useState(nickname);
   const [editRole, setEditRole] = useState(userRole);
   const [editGroupName, setEditGroupName] = useState(familyGroupName);
-// 用途：把登入資料存在手機，之後開 App 可以自動登入
-const saveLoginSessionToDevice = async (user, loginEmail) => {
-  try {
-    await AsyncStorage.setItem(
-      SAVED_LOGIN_KEY,
-      JSON.stringify({
-        email: loginEmail,
-        idToken: user.idToken,
-        localId: user.localId,
-        refreshToken: user.refreshToken || '',
-        savedAt: Date.now()
-      })
-    );
-  } catch (error) {
-    console.log('saveLoginSessionToDevice error:', error);
-  }
-};
-
-// 用途：登出時清除手機內的登入資料
-const clearLoginSessionFromDevice = async () => {
-  try {
-    await AsyncStorage.removeItem(SAVED_LOGIN_KEY);
-  } catch (error) {
-    console.log('clearLoginSessionFromDevice error:', error);
-  }
-};
-
-// 用途：登入成功 / 自動登入成功後，讀取 Firestore 的 user profile，然後決定進 main 還是 group_setup
-const loadUserProfileAfterAuth = async (loginEmail) => {
-  const users = await db.collection('users').getAll();
-  const me = users.find(u => u.email === loginEmail);
-
-  setEmail(loginEmail);
-
-  if (me) {
-    setNickname(me.nickname || '');
-    setUserRole(me.userRole || 'eat');
-    setFamilyGroupName(me.familyGroupName || '');
-    setGroupInviteCode(me.groupInviteCode || '');
-
-    let finalGroupRole = 'member';
-    let finalAdminEmails = [];
-
-    if (me.groupInviteCode) {
-      const groups = await db.collection('familyGroups').getAll();
-      const currentGroup = groups.find(g => g.inviteCode === me.groupInviteCode);
-
-      if (currentGroup) {
-        finalAdminEmails = Array.isArray(currentGroup.adminEmails)
-          ? currentGroup.adminEmails
-          : [];
-
-        finalGroupRole = finalAdminEmails.includes(loginEmail) ? 'admin' : 'member';
-      }
-    }
-
-    setGroupRole(finalGroupRole);
-    setGroupAdminEmails(finalAdminEmails);
-
-    if (me.groupInviteCode) {
-      setAppStage('main');
-    } else {
-      setAppStage('group_setup');
-    }
-  } else {
-    setGroupRole('member');
-    setGroupAdminEmails([]);
-    setAppStage('group_setup');
-  }
-};
-
-// 用途：App 每次打開時，先檢查手機是否已有登入紀錄；有就自動進入 App
-useEffect(() => {
-  const restoreLoginSessionFromDevice = async () => {
-    try {
-      const savedLoginText = await AsyncStorage.getItem(SAVED_LOGIN_KEY);
-
-      if (!savedLoginText) {
-        setAppStage('login');
-        return;
-      }
-
-      const savedLogin = JSON.parse(savedLoginText);
-
-      if (!savedLogin?.email || !savedLogin?.idToken) {
-        await clearLoginSessionFromDevice();
-        clearAuthToken();
-        setAppStage('login');
-        return;
-      }
-
-      setAuthToken(savedLogin.idToken);
-
-      await loadUserProfileAfterAuth(savedLogin.email);
-    } catch (error) {
-      console.log('restoreLoginSessionFromDevice error:', error);
-
-      await clearLoginSessionFromDevice();
-      clearAuthToken();
-      setAppStage('login');
-    } finally {
-      setIsCheckingSavedLogin(false);
-    }
-  };
-
-  restoreLoginSessionFromDevice();
-}, []);
-
-
 
  // 登入與註冊邏輯
-// 用途：登入 Firebase Auth，然後讀取 Firestore 入面自己的 user profile
 // 用途：登入 Firebase Auth，然後讀取 Firestore 入面自己的 user profile
 const handleLogin = async () => {
   try {
@@ -175,11 +57,49 @@ const handleLogin = async () => {
     // 存 token 給 Firestore 用
     setAuthToken(user.idToken);
 
-    // 存登入紀錄到手機，之後開 App 可以自動登入
-    await saveLoginSessionToDevice(user, email);
-
     // 登入後，從 Firebase users collection 找回自己資料
-    await loadUserProfileAfterAuth(email);
+    const users = await db.collection('users').getAll();
+    const me = users.find(u => u.email === email);
+
+    if (me) {
+      setNickname(me.nickname || '');
+      setUserRole(me.userRole || 'eat');
+      setFamilyGroupName(me.familyGroupName || '');
+      setGroupInviteCode(me.groupInviteCode || '');
+
+      // 用途：登入後以 familyGroups.adminEmails 判斷目前使用者是否 admin
+      // ownerEmail 只作建立者紀錄，不再作為權限判斷
+      let finalGroupRole = 'member';
+      let finalAdminEmails = [];
+
+      if (me.groupInviteCode) {
+        const groups = await db.collection('familyGroups').getAll();
+        const currentGroup = groups.find(g => g.inviteCode === me.groupInviteCode);
+
+        if (currentGroup) {
+          finalAdminEmails = Array.isArray(currentGroup.adminEmails)
+            ? currentGroup.adminEmails
+            : [];
+
+          finalGroupRole = finalAdminEmails.includes(email) ? 'admin' : 'member';
+        }
+      }
+
+      setGroupRole(finalGroupRole);
+      setGroupAdminEmails(finalAdminEmails);
+
+      // 如果已經有群組，就入 main；如果未有，就去 group_setup
+      if (me.groupInviteCode) {
+        setAppStage('main');
+      } else {
+        setAppStage('group_setup');
+      }
+    } else {
+      // Auth 有帳號，但 Firestore 沒有 profile
+      setGroupRole('member');
+      setGroupAdminEmails([]);
+      setAppStage('group_setup');
+    }
 
     console.log("成功登入:", user);
   } catch (err) {
@@ -200,13 +120,10 @@ const handleRegister = async () => {
       return showMessage('兩次輸入的密碼不一致。');
     }
 
- const user = await registerWithEmail(email, password);
+    const user = await registerWithEmail(email, password);
 
-// 存 token 給 Firestore 用
-setAuthToken(user.idToken);
-
-// 存登入紀錄到手機，之後開 App 可以自動登入
-await saveLoginSessionToDevice(user, email);
+    // 存 token 給 Firestore 用
+    setAuthToken(user.idToken);
 
     await db.collection('users').add({
       uid: user.localId,
@@ -1021,8 +938,7 @@ if (memberEmails.length === 0) {
 };
 
 // 用途：登出帳號，只清除本機登入狀態，不刪除 Firebase 資料
-const handleLogout = async () => {
-  await clearLoginSessionFromDevice();
+const handleLogout = () => {
   clearAuthToken();
 
   setEmail('');
@@ -1260,8 +1176,6 @@ if (memberEmails.length === 0) {
     // =========================
     // 5. 清本機 state
     // =========================
-  await clearLoginSessionFromDevice();
-
     clearAuthToken();
 
     setEmail('');
@@ -1542,7 +1456,7 @@ const handleImportHongKongApprovedDishes = async () => {
     showMessage('匯入失敗', error.message || String(error));
   }
 };
-
+``
 
 // 常見食材與分類庫
 const INITIAL_TAG_CATEGORIES = {
@@ -3757,30 +3671,12 @@ const handleAdminRemoveDishFromGroup = async (dish) => {
     showMessage('操作失敗', error.message || String(error));
   }
 };
-// 用途：判斷這道菜是否可以被目前用戶永久刪除
-// 只有「自己建立」+「屬於目前群組」+「不是 approved 公開菜式」才可永久刪除
-const canPermanentlyDeleteDishFromGroup = (dish) => {
-  if (!dish) return false;
 
-  const status = String(
-    dish.publishStatus ?? (dish.isPublic ? 'approved' : 'private')
-  ).trim().toLowerCase();
-
-  const isCreatedByMe = dish.createdByEmail === email;
-  const isFromCurrentGroup = dish.groupCode === groupInviteCode;
-
-  // approved 公開菜式不永久刪，只能從目前群組隱藏
-  const isApprovedPublic = status === 'approved' || dish.isPublic === true;
-
-  return isCreatedByMe && isFromCurrentGroup && !isApprovedPublic;
-};
-// 用途：admin 一鍵處理多個已選菜式
-// 自己新增到目前群組的私房 / 待審菜式：永久刪除
-// 公開菜式 / 別人建立的菜式：只從目前群組隱藏
+// 用途：admin 一鍵隱藏多個已選菜式
 const handleAdminHideSelectedDishes = async () => {
   try {
     if (!isCurrentUserAdmin) {
-      return showMessage('只有管理員可以管理家庭菜餚庫。');
+      return showMessage('沒有權限管理家庭菜餚庫。');
     }
 
     if (!groupInviteCode) {
@@ -3788,7 +3684,7 @@ const handleAdminHideSelectedDishes = async () => {
     }
 
     if (selectedDishIdsForHide.length === 0) {
-      return showMessage('請先勾選要處理的菜式。');
+      return showMessage('請勾選要隱藏的菜式。');
     }
 
     const targetDishes = (editableDisplayedDishes || []).filter(dish =>
@@ -3796,32 +3692,14 @@ const handleAdminHideSelectedDishes = async () => {
     );
 
     if (targetDishes.length === 0) {
-      return showMessage('已選菜式不存在。');
+      return showMessage('找不到已選菜式不存在，請重新勾選。');
     }
 
-    let deletedCount = 0;
-    let hiddenCount = 0;
-
-    const deletedDishIds = [];
-    const hiddenDishUpdates = [];
+    let successCount = 0;
 
     for (const dish of targetDishes) {
       if (!dish?.id) continue;
 
-      // =========================
-      // A. 自己新增到目前群組的非公開菜式：永久刪除
-      // =========================
-      if (canPermanentlyDeleteDishFromGroup(dish)) {
-        await db.collection('dishes').delete(dish.id);
-
-        deletedDishIds.push(dish.id);
-        deletedCount += 1;
-        continue;
-      }
-
-      // =========================
-      // B. 其他菜式：只從目前群組隱藏
-      // =========================
       const oldHiddenGroups = Array.isArray(dish.hiddenForGroups)
         ? dish.hiddenForGroups
         : [];
@@ -3854,41 +3732,39 @@ const handleAdminHideSelectedDishes = async () => {
         updatedAt: new Date()
       });
 
-      hiddenDishUpdates.push({
-        id: dish.id,
-        hiddenForGroups: updatedHiddenGroups
-      });
-
-      hiddenCount += 1;
+      successCount += 1;
     }
 
-    // =========================
-    // 更新本機 dishes
-    // =========================
+    // 更新本機 dishes，令畫面即時消失
     setDishes(prev =>
-      prev
-        // 永久刪除的菜式，直接從本機移除
-        .filter(dish => !deletedDishIds.includes(dish.id))
-        // 被隱藏的菜式，更新 hiddenForGroups
-        .map(dish => {
-          const update = hiddenDishUpdates.find(item => item.id === dish.id);
+      prev.map(dish => {
+        if (!selectedDishIdsForHide.includes(dish.id)) {
+          return dish;
+        }
 
-          if (!update) return dish;
+        const oldHiddenGroups = Array.isArray(dish.hiddenForGroups)
+          ? dish.hiddenForGroups
+          : [];
 
-          return {
-            ...dish,
-            hiddenForGroups: update.hiddenForGroups
-          };
-        })
+        const updatedHiddenGroups = oldHiddenGroups.includes(groupInviteCode)
+          ? oldHiddenGroups
+          : [...oldHiddenGroups, groupInviteCode];
+
+        return {
+          ...dish,
+          hiddenForGroups: updatedHiddenGroups
+        };
+      })
     );
 
     setSelectedDishIdsForHide([]);
 
   } catch (error) {
     console.log('handleAdminHideSelectedDishes error:', error);
-    showMessage('操作失敗', error.message || String(error));
+    showMessage('一鍵隱藏失敗', error.message || String(error));
   }
 };
+
 // 用途：admin 還原目前群組已隱藏的菜式
 const handleAdminRestoreHiddenDish = async (dish) => {
   try {
@@ -3936,6 +3812,8 @@ const handleAdminRestoreHiddenDish = async (dish) => {
     showMessage('還原失敗', error.message || String(error));
   }
 };
+
+
 
 
 const handleAddDish = async () => {
@@ -4104,27 +3982,23 @@ const renderTagButtons = (tags, currentSelected, onToggle) => {
 
 
       {/* ================= 各種 Modals ================= */}
-
-      
-// 用途：App 開啟時先檢查是否有已儲存登入；未檢查完之前先不顯示 login
-if (isCheckingSavedLogin) {
-  return null;
-}
-
 // 1. 登入頁面
 if (appStage === 'login') {
   return (
     <View style={styles.authScreen}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFF8F0" />
 
-<ScrollView
-  style={styles.content}
-  keyboardShouldPersistTaps="handled"
-  contentContainerStyle={{
-  paddingBottom: 100 + Math.max(insets.bottom, 16)
-}}
->
-    
+      <ScrollView
+        style={styles.authScroll}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={[
+          styles.authContainer,
+          {
+            paddingTop: Math.max(insets.top, 20) + 18,
+            paddingBottom: 80 + Math.max(insets.bottom, 16)
+          }
+        ]}
+      >
         {/* 標題 */}
         <View style={styles.authTitleArea}>
           <Text style={styles.sectionTitleLarge}>🍲 今晚食乜餸</Text>
@@ -4188,12 +4062,16 @@ if (appStage === 'register') {
       <StatusBar barStyle="dark-content" backgroundColor="#FFF8F0" />
 
       <ScrollView
-  style={styles.content}
-  keyboardShouldPersistTaps="handled"
-contentContainerStyle={{
-  paddingBottom: 100 + Math.max(insets.bottom, 16)
-}}
->
+        style={styles.authScroll}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={[
+          styles.authContainer,
+          {
+            paddingTop: Math.max(insets.top, 20) + 18,
+            paddingBottom: 80 + Math.max(insets.bottom, 16)
+          }
+        ]}
+      >
         {/* 標題 */}
         <View style={styles.authTitleArea}>
           <Text style={styles.sectionTitle}>📝 建立新帳號</Text>
@@ -4274,13 +4152,17 @@ if (appStage === 'group_setup') {
     <View style={styles.authScreen}>
       <StatusBar barStyle="dark-content" backgroundColor="#FFF8F0" />
 
-<ScrollView
-  style={styles.content}
-  keyboardShouldPersistTaps="handled"
-contentContainerStyle={{
-  paddingBottom: 100 + Math.max(insets.bottom, 16)
-}}
->
+      <ScrollView
+        style={styles.authScroll}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={[
+          styles.authContainer,
+          {
+            paddingTop: Math.max(insets.top, 20) + 18,
+            paddingBottom: 80 + Math.max(insets.bottom, 16)
+          }
+        ]}
+      >
         <View style={styles.authTitleArea}>
           <Text style={styles.sectionTitleLarge}>🏠 建立家庭群組</Text>
         </View>
@@ -4346,25 +4228,19 @@ contentContainerStyle={{
   );
 }
 
-return (
-  <SafeAreaView
-    style={styles.safeRoot}
-    edges={['top', 'left', 'right']}
-  >
-    <StatusBar
-      barStyle="dark-content"
-      backgroundColor="#FFF8F0"
-      translucent={false}
-    />
 
-    <View style={styles.container}>
-      <ScrollView
-        style={styles.content}
-        keyboardShouldPersistTaps="handled"
-contentContainerStyle={{
-  paddingBottom: 100 + Math.max(insets.bottom, 16)
-}}
-      >
+
+return (
+  <View style={styles.container}>
+    <StatusBar barStyle="light-content" backgroundColor="#ff8a65" />
+
+    <ScrollView
+      style={styles.content}
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={{
+        paddingBottom: 100 + Math.max(insets.bottom, 16)
+      }}
+    >
       {/* 頁面頂部 header：跟內容一起捲動，不固定置頂 */}
       <View style={styles.header}>
         <View style={styles.headerInner}>
@@ -4551,7 +4427,7 @@ contentContainerStyle={{
               onPress={handleAdminHideSelectedDishes}
             >
               <Text style={styles.editMainActionText}>
-                🧹 一鍵處理 ({selectedDishIdsForHide.length})
+                🙈 一鍵隱藏已選 ({selectedDishIdsForHide.length})
               </Text>
             </TouchableOpacity>
 
@@ -5512,9 +5388,9 @@ contentContainerStyle={{
       <ScrollView
         style={styles.bottomSheetScroll}
         keyboardShouldPersistTaps="handled"
-contentContainerStyle={{
-  paddingBottom: 100 + Math.max(insets.bottom, 16)
-}}
+        contentContainerStyle={{
+          paddingBottom: 100 + Math.max(insets.bottom, 16)
+        }}
       >
         {/* 部分一：加入新分類 */}
         <View style={styles.tagManagerSection}>
@@ -6486,7 +6362,6 @@ contentContainerStyle={{
 </View>
 
     </View>
-      </SafeAreaView>
   );
 }
 export default function App() {
@@ -6503,11 +6378,6 @@ const styles = StyleSheet.create({
   // =====================
   // 基礎版面
   // =====================
-safeRoot: {
-  flex: 1,
-  backgroundColor: '#FFF8F0'
-},
-
   container: {
     flex: 1,
     backgroundColor: '#FFF8F0'
@@ -6554,25 +6424,26 @@ safeRoot: {
   // =====================
   // Header
   // =====================
-header: {
-  backgroundColor: '#FF8A65',
-  paddingHorizontal: 14,
-  marginBottom: 12,
-  borderRadius: 14
-},
+  header: {
+    backgroundColor: '#FF8A65',
+    paddingHorizontal: 16,
+    paddingBottom: 0,
+    marginBottom: 14,
+    borderRadius: 16
+  },
 
-headerInner: {
-  paddingVertical: 8,
-  alignItems: 'center',
-  justifyContent: 'center'
-},
+  headerInner: {
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
 
-headerTitle: {
-  fontSize: 18,
-  fontWeight: 'bold',
-  color: '#fff',
-  textAlign: 'center'
-},
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#fff',
+    textAlign: 'center'
+  },
 
   // =====================
   // 標題文字
@@ -8603,3 +8474,4 @@ memberRemoveButtonText: {
   color: '#E85D75'
 }
 });
+
