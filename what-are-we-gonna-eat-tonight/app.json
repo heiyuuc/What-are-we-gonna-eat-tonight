@@ -31,6 +31,12 @@
         "projectId": "23a717d6-a7c3-437f-ba6f-61a313fed841"
       }
     },
-    "owner": "heiyuu"
+    "owner": "heiyuu",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/23a717d6-a7c3-437f-ba6f-61a313fed841"
+    }
   }
 }
