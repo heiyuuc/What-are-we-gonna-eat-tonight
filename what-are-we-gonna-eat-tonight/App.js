@@ -23,6 +23,9 @@ const [isCheckingSavedLogin, setIsCheckingSavedLogin] = useState(true);
   const [currentTab, setCurrentTab] = useState('home');
   const CURRENT_DATE = new Date();
 
+//一鍵返回最頂
+const [showScrollTopBtn, setShowScrollTopBtn] = useState(false);
+
  // 用戶與註冊狀態
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -1442,110 +1445,6 @@ const handleSaveProfile = async () => {
   }
 };
 
-const HONG_KONG_APPROVED_DISHES = [
-  {
-    id: 'hk_dish_001',
-    name: '蕃茄炒蛋',
-    ingredients: '蕃茄、雞蛋、蔥花、蒜頭、糖、鹽',
-    tags: ['🥚 蛋類', '🌽 瓜果', '🇭🇰 港式', '🔥 煎炒', '⏱️ 快手菜', '🏠 家常菜'],
-    isPublic: true,
-    requestedPublic: false,
-    publishStatus: 'approved',
-    groupCode: '',
-    familyGroupName: ''
-  },
-  {
-    id: 'hk_dish_002',
-    name: '薯仔炆雞翼',
-    ingredients: '雞翼、薯仔、洋蔥、蒜頭、薑、生抽、老抽、蠔油',
-    tags: ['🐔 雞肉', '🥕 根莖', '🇭🇰 港式', '🥘 燜燉', '🏠 家常菜'],
-    isPublic: true,
-    requestedPublic: false,
-    publishStatus: 'approved',
-    groupCode: '',
-    familyGroupName: ''
-  },
-  {
-    id: 'hk_dish_003',
-    name: '蒸水蛋',
-    ingredients: '雞蛋、清水、鹽、豉油、蔥花',
-    tags: ['🥚 蛋類', '🇭🇰 港式', '💨 蒸煮', '♨️ 蒸餸', '⏱️ 快手菜', '🏠 家常菜'],
-    isPublic: true,
-    requestedPublic: false,
-    publishStatus: 'approved',
-    groupCode: '',
-    familyGroupName: ''
-  }
-];
-
-// 用途：admin 一鍵匯入香港 approved 公開菜式
-const handleImportHongKongApprovedDishes = async () => {
-  try {
-    if (!isCurrentUserAdmin) {
-      return showMessage('沒有權限', '只有 admin 可以匯入預設菜式。');
-    }
-
-    const allDishes = await db.collection('dishes').getAll();
-    const safeDishes = Array.isArray(allDishes) ? allDishes : [];
-
-    let addedCount = 0;
-    let skippedCount = 0;
-
-    for (const dish of HONG_KONG_APPROVED_DISHES) {
-      const alreadyExists = safeDishes.some(existing =>
-        existing.seedKey === dish.id
-      );
-
-      if (alreadyExists) {
-        skippedCount += 1;
-        continue;
-      }
-
-      const dishData = {
-        name: dish.name || '',
-        ingredients: dish.ingredients || '未填寫',
-        tags: Array.isArray(dish.tags) ? dish.tags : [],
-
-        seedKey: dish.id || '',
-        seedSource: 'hong_kong_approved_dishes',
-
-        createdByEmail: email || '',
-        createdByNickname: nickname || '',
-
-        familyGroupName: '',
-        groupCode: '',
-
-        isPublic: true,
-        requestedPublic: false,
-        publishStatus: 'approved',
-
-        hiddenForGroups: [],
-        createdAt: new Date()
-      };
-
-      const result = await db.collection('dishes').add(dishData);
-
-      const localDish = {
-        id: result.name ? result.name.split('/').pop() : `${Date.now()}-${Math.random()}`,
-        ...dishData
-      };
-
-      setDishes(prev => [localDish, ...prev]);
-
-      addedCount += 1;
-    }
-
-    showMessage(
-      '匯入完成',
-      `已新增 ${addedCount} 道公開香港菜式。\n已略過 ${skippedCount} 道已存在菜式。`
-    );
-  } catch (error) {
-    console.log('handleImportHongKongApprovedDishes error:', error);
-    showMessage('匯入失敗', error.message || String(error));
-  }
-};
-
-
 // 常見食材與分類庫
 const INITIAL_TAG_CATEGORIES = {
   ingredients: {
@@ -1560,18 +1459,13 @@ const INITIAL_TAG_CATEGORIES = {
   },
   cuisine: { title: '🌐 菜式地區', tags: ['🇨🇳 中式', '🇭🇰 港式', '🇯🇵 日式', '🇰🇷 韓式', '🇹🇭 泰式', '🇮🇹 西式','🇹🇼 台式',] },
   method: { title: '🍳 烹調方式', tags: ['🔥 煎炒', '💨 蒸煮', '♨️ 蒸餸', '🥘 燜燉', '🍗 酥炸', '🥗 涼拌', '🔥 烘烤', '💨 氣炸', '🍲 火鍋', '🍲 湯底', '🔥 鑊氣', '🍲 煲仔飯'] },
-  flavour: { title: '😋 味道', tags: ['🍯 酸甜', '🍛 咖喱', '🌶️ 辣味', '🧂 清淡'] },
+  flavour: { title: '😋 味道', tags: ['🍯 酸甜', '🍬 甜', '🍛 咖喱', '🌶️ 辣味', '🧂 清淡'] },
   lifestyle: { title: '🍽️ 菜式類型', tags: ['🍰 甜品', '🥟 點心', '⏱️ 快手菜', '🏠 家常菜', '🥤 茶餐廳', '🍢 大牌檔', '🧓 老火湯', '🥗 低卡減脂', '🌱 純素', '🌱 蔬食'] }
 };
 
 
 const INITIAL_DISHES = [
-  { id: '1', name: '番茄炒蛋', tags: ['🥬 葉菜', '🥚 蛋類', '🇭🇰 港式', '⏱️ 快手菜'], ingredients: '番茄、雞蛋', isPublic: true, groupCode: '' },
-  { id: '2', name: '青紅蘿蔔豬骨湯', tags: ['🍲 湯底', '🇭🇰 港式', '🥘 燜燉', '🐷 豬肉', '🥕 根莖'], ingredients: '青蘿蔔、紅蘿蔔、豬骨', isPublic: true, groupCode: '' },
-  { id: '3', name: '打拋豬肉飯', tags: ['🐷 豬肉', '🇹🇭 泰式', '🔥 煎炒', '🍚 白米飯'], ingredients: '豬肉碎、九層塔、辣椒', isPublic: true, groupCode: '' },
-  { id: '4', name: '楊枝甘露', tags: ['🌱 蔬食'], ingredients: '芒果, 西米, 椰汁', isPublic: true, groupCode: 'HOME123' },
-  { id: '5', name: '香煎肋眼牛排', tags: ['🥩 牛肉', '🇮🇹 西式', '🔥 煎炒'], ingredients: '牛排、蒜頭、迷迭香', isPublic: false, groupCode: '' },
-];
+  { id: '1', name: '番茄炒蛋', tags: ['🥬 葉菜', '🥚 蛋類', '🇭🇰 港式', '⏱️ 快手菜'], ingredients: '番茄、雞蛋', isPublic: true, groupCode: '' }]
 
 //月曆
 const formatDateToString = (date) => {
@@ -4408,12 +4302,23 @@ return (
 
     <View style={styles.container}>
       <ScrollView
-        style={styles.content}
-        keyboardShouldPersistTaps="handled"
-contentContainerStyle={{
-  paddingBottom: 100 + Math.max(insets.bottom, 16)
-}}
-      >
+  style={styles.content}
+  keyboardShouldPersistTaps="handled"
+  contentContainerStyle={{
+    paddingBottom: 100 + Math.max(insets.bottom, 16)
+  }}
+  onScroll={(e) => {
+    const y = e.nativeEvent.contentOffset.y;
+
+    if (y > 500) {
+      setShowScrollTopBtn(true);
+    } else {
+      setShowScrollTopBtn(false);
+    }
+  }}
+  scrollEventThrottle={16}
+  ref={(ref) => { this.scrollViewRef = ref; }}
+>
       {/* 頁面頂部 header：跟內容一起捲動，不固定置頂 */}
       <View style={styles.header}>
         <View style={styles.headerInner}>
@@ -4898,12 +4803,7 @@ contentContainerStyle={{
               )}
             </View>
           )}
-
-          {req.status === 'pending' && !canCurrentUserReview && (
-            <Text style={styles.waitingReviewText}>
-              ⏳ 正在等待大廚 {displayCooks} 審核中...
-            </Text>
-          )}
+         
         </View>
       );
     })}
@@ -5458,6 +5358,16 @@ contentContainerStyle={{
 )}
       </ScrollView>
 
+{showScrollTopBtn && (
+  <TouchableOpacity
+    style={styles.scrollTopButton}
+    onPress={() => {
+      this.scrollViewRef?.scrollTo({ y: 0, animated: true });
+    }}
+  >
+    <Text style={styles.scrollTopText}>⬆</Text>
+  </TouchableOpacity>
+)}
 
       {/* ================= 各種 Modals ================= */}
 
@@ -8746,5 +8656,25 @@ memberRemoveButtonText: {
   fontSize: 12,
   fontWeight: 'bold',
   color: '#E85D75'
+},
+scrollTopButton: {
+  position: 'absolute',
+  bottom: 120,
+  right: 20,
+  backgroundColor: '#FF8C42',
+  width: 48,
+  height: 48,
+  borderRadius: 24,
+  justifyContent: 'center',
+  alignItems: 'center',
+  elevation: 5
+},
+
+scrollTopText: {
+  color: '#fff',
+  fontSize: 18,
+  fontWeight: 'bold'
 }
 });
+
+
