@@ -7,6 +7,18 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Calendar } from 'react-native-calendars';
 function AppContent() {
 
+import * as Updates from 'expo-updates';
+//即時update
+useEffect(() => {
+  (async () => {
+    const update = await Updates.checkForUpdateAsync();
+    if (update.isAvailable) {
+      await Updates.fetchUpdateAsync();
+      await Updates.reloadAsync();
+    }
+  })();
+}, []);
+
   const insets = useSafeAreaInsets();
 //key
 const SAVED_LOGIN_KEY = 'what_are_we_gonna_eat_saved_login_v1';
