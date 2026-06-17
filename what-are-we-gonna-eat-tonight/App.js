@@ -5,9 +5,10 @@ import { db, registerWithEmail, loginWithEmail, setAuthToken, clearAuthToken, de
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Calendar } from 'react-native-calendars';
+import * as Updates from 'expo-updates';
 function AppContent() {
 
-import * as Updates from 'expo-updates';
+
 //即時update
 useEffect(() => {
   (async () => {
@@ -8688,5 +8689,3 @@ scrollTopText: {
   fontWeight: 'bold'
 }
 });
-
-
