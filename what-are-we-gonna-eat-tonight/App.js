@@ -14,6 +14,7 @@ function AppContent() {
 //key
 const SAVED_LOGIN_KEY = 'what_are_we_gonna_eat_saved_login_v1';
 const LAST_SELECTION_KEY = 'what_are_we_gonna_eat_last_selection_v1';
+const LAST_FRUIT_SELECTION_KEY = 'what_are_we_gonna_eat_last_fruit_selection_v1';
 
 
 // 流程導航: 'login' -> 'register' -> 'group_setup' -> 'main'
@@ -1530,6 +1531,39 @@ const INITIAL_TAG_CATEGORIES = {
 const INITIAL_DISHES = [
   { id: '1', name: '番茄炒蛋', tags: ['🥬 葉菜', '🥚 蛋類', '🇭🇰 港式', '⏱️ 快手菜'], ingredients: '番茄、雞蛋', isPublic: true, groupCode: '' }]
 
+const FRUIT_SEASONS = ['全年', '春', '夏', '秋', '冬'];
+
+const INITIAL_FRUITS = [
+  { id: 'fruit_apple', name: '蘋果', seasons: ['全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_banana', name: '香蕉', seasons: ['全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_orange', name: '橙', seasons: ['全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_kiwi', name: '奇異果', seasons: ['全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_avocado', name: '牛油果', seasons: ['全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+
+  { id: 'fruit_strawberry', name: '士多啤梨', seasons: ['冬', '春'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_grapefruit', name: '西柚', seasons: ['冬', '春'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_blueberry', name: '藍莓', seasons: ['春', '夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_dragonfruit', name: '火龍果', seasons: ['春', '夏', '秋'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+
+  { id: 'fruit_mango', name: '芒果', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_watermelon', name: '西瓜', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_melon', name: '蜜瓜', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_hami_melon', name: '哈密瓜', seasons: ['夏', '秋'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_lychee', name: '荔枝', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_longan', name: '龍眼', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_durian', name: '榴槤', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_mangosteen', name: '山竹', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_pineapple', name: '菠蘿', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_peach', name: '水蜜桃', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+
+  { id: 'fruit_pear', name: '梨', seasons: ['秋'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_persimmon', name: '柿', seasons: ['秋'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_pomelo', name: '柚子', seasons: ['秋', '冬'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_guava', name: '番石榴', seasons: ['秋'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_cherry', name: '車厘子', seasons: ['冬'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_grape', name: '提子', seasons: ['冬', '全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] }
+];
+
 //月曆
 const formatDateToString = (date) => {
   const y = date.getFullYear();
@@ -1557,8 +1591,71 @@ const isPastDate = (dateStr) => {
   const today = formatDateToString(CURRENT_DATE);
   return normalized < today;
 };
+// 用途：取得目前水果優先季節
+// 注意：這裡用可調整 mapping，不代表香港四季硬性定義
+const getCurrentFruitPrioritySeason = () => {
+  const month = CURRENT_DATE.getMonth() + 1;
 
+  const monthToFruitSeason = {
+    1: '冬',
+    2: '春',
+    3: '春',
+    4: '春',
+    5: '夏',
+    6: '夏',
+    7: '夏',
+    8: '秋',
+    9: '秋',
+    10: '秋',
+    11: '冬',
+    12: '冬'
+  };
 
+  return monthToFruitSeason[month] || '全年';
+};
+
+// 用途：水果季節標籤排序
+// 全年永遠第一，其餘由目前優先季節開始輪轉
+const getSortedFruitSeasons = () => {
+  const baseOrder = ['春', '夏', '秋', '冬'];
+  const current = getCurrentFruitPrioritySeason();
+
+  if (!baseOrder.includes(current)) {
+    return ['全年', ...baseOrder];
+  }
+
+  const startIndex = baseOrder.indexOf(current);
+
+  return [
+    '全年',
+    ...baseOrder.slice(startIndex),
+    ...baseOrder.slice(0, startIndex)
+  ];
+};
+const getFruitEmoji = (fruitName) => {
+  const name = String(fruitName || '');
+
+  if (name.includes('蘋果')) return '🍎';
+  if (name.includes('香蕉')) return '🍌';
+  if (name.includes('橙') || name.includes('柑') || name.includes('橘')) return '🍊';
+  if (name.includes('檸檬')) return '🍋';
+  if (name.includes('西瓜')) return '🍉';
+  if (name.includes('提子') || name.includes('葡萄')) return '🍇';
+  if (name.includes('士多啤梨') || name.includes('草莓')) return '🍓';
+  if (name.includes('藍莓')) return '🫐';
+  if (name.includes('車厘子') || name.includes('櫻桃')) return '🍒';
+  if (name.includes('桃')) return '🍑';
+  if (name.includes('芒果')) return '🥭';
+  if (name.includes('菠蘿') || name.includes('鳳梨')) return '🍍';
+  if (name.includes('奇異果')) return '🥝';
+  if (name.includes('牛油果')) return '🥑';
+  if (name.includes('梨')) return '🍐';
+  if (name.includes('椰')) return '🥥';
+  if (name.includes('龍眼') || name.includes('荔枝') || name.includes('山竹') || name.includes('榴槤')) return '🥭';
+
+  return '🍈';
+};
+//
 const showMessage = (title, message = '') => {
   if (Platform.OS === 'web') {
     alert(message ? `${title}\n${message}` : title);
@@ -1621,6 +1718,8 @@ const getStatusLabel = (status) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTags, setSelectedTags] = useState([]);
  
+
+ 
   const [currentYear, setCurrentYear] = useState(CURRENT_DATE.getFullYear());
   const [currentMonth, setCurrentMonth] = useState(CURRENT_DATE.getMonth() + 1);
 
@@ -1629,7 +1728,33 @@ const getStatusLabel = (status) => {
   const [selectedDish, setSelectedDish] = useState(null);
 
 
+// =====================
+// 水果專頁 State
+// =====================
+const [homeSubPage, setHomeSubPage] = useState('dishes'); // dishes / fruits
 
+const [fruits, setFruits] = useState(INITIAL_FRUITS);
+const [fruitSearchQuery, setFruitSearchQuery] = useState('');
+const [selectedFruitSeasons, setSelectedFruitSeasons] = useState([]);
+
+const [isFruitEditMode, setIsFruitEditMode] = useState(false);
+const [selectedFruitIdsForHide, setSelectedFruitIdsForHide] = useState([]);
+const [hiddenFruitsModalVisible, setHiddenFruitsModalVisible] = useState(false);
+
+const [fruitRequestModalVisible, setFruitRequestModalVisible] = useState(false);
+const [selectedFruit, setSelectedFruit] = useState(null);
+
+const [fruitTargetName, setFruitTargetName] = useState('');
+const [fruitTargetEmail, setFruitTargetEmail] = useState('');
+const [fruitTargetDropdownOpen, setFruitTargetDropdownOpen] = useState(false);
+
+const [fruitAutoAddToList, setFruitAutoAddToList] = useState(null);
+const [lastFruitTargetEmail, setLastFruitTargetEmail] = useState('');
+const [lastFruitTargetName, setLastFruitTargetName] = useState('');
+
+const [newFruitName, setNewFruitName] = useState('');
+const [newFruitSeasons, setNewFruitSeasons] = useState([]);
+const [newFruitIsPublic, setNewFruitIsPublic] = useState(false);
 
 
   // 半分頁專用 State
@@ -1717,12 +1842,14 @@ const [lastApproveAddToList, setLastApproveAddToList] = useState(null);
 const [rejectModalVisible, setRejectModalVisible] = useState(false);
 const [rejectTargetRequest, setRejectTargetRequest] = useState(null);
 const [rejectReasonInput, setRejectReasonInput] = useState('');
-
+const FRUIT_REJECT_REASONS = ['不當造', '季節錯誤', '買不到'];
 // 用途：大廚改期時填寫原因，可空白
 const [rescheduleReasonInput, setRescheduleReasonInput] = useState('');
 
 // 用途：從 Firebase requests collection 讀取的點菜要求
 const [requests, setRequests] = useState([]);
+// 用途：分頁 2 排餐記錄篩選：all / dish / fruit
+const [requestTypeFilter, setRequestTypeFilter] = useState('all');
 
 // 用途：控制收到的點菜要求 Modal
 const [requestInboxVisible, setRequestInboxVisible] = useState(false);
@@ -1750,13 +1877,53 @@ const [isRescheduleSubmitting, setIsRescheduleSubmitting] = useState(false);
 // 不包含 sender，也不包含 targetCook，因為 A給B / B給A 都要合併
 // 但一定要包含 date 和 meal，否則 6月4日和6月11日會被錯誤合併
 const getRequestUniqueKey = (req) => {
+  if (req.requestType === 'fruit') {
+    return [
+      'fruit',
+      req.groupCode || '',
+      req.fruitId || req.fruitName || req.dishName || '',
+      req.senderEmail || '',
+      req.targetPersonEmail || req.targetCookEmail || ''
+    ].join('|');
+  }
+
   return [
+    'dish',
     req.groupCode || '',
     req.dishId || req.dishName || '',
     req.date || '',
     req.meal || ''
   ].join('|');
 };
+const saveLastFruitSelectionToDevice = async (data) => {
+  try {
+    await AsyncStorage.setItem(
+      LAST_FRUIT_SELECTION_KEY,
+      JSON.stringify(data)
+    );
+  } catch (error) {
+    console.log('saveLastFruitSelection error:', error);
+  }
+};
+
+const loadLastFruitSelectionFromDevice = async () => {
+  try {
+    const text = await AsyncStorage.getItem(LAST_FRUIT_SELECTION_KEY);
+
+    if (!text) return;
+
+    const data = JSON.parse(text);
+
+    setLastFruitTargetEmail(data?.targetEmail || '');
+    setLastFruitTargetName(data?.targetName || '');
+  } catch (error) {
+    console.log('loadLastFruitSelection error:', error);
+  }
+};
+
+useEffect(() => {
+  loadLastFruitSelectionFromDevice();
+}, []);
 
 // 用途：家庭動態顯示時，把同一群組 / 同一菜式 / 同一日期 / 同一餐次的 request 合併成一張卡
 // 重要：主顯示資料以 updatedAt 最新的一筆為準，避免 cookMessage / rejected / 改期通知被舊資料蓋住
@@ -1780,14 +1947,29 @@ const uniqueRequests = useMemo(() => {
       req.senderEmail ||
       '未知';
 
-    const targetCookName =
-      req.targetCookName ||
-      req.target ||
-      req.targetCookEmail ||
-      '未知';
+ const targetCookName =
+  req.requestType === 'fruit'
+    ? (
+        req.targetPersonName ||
+        req.targetCookName ||
+        req.target ||
+        req.targetPersonEmail ||
+        req.targetCookEmail ||
+        '未知'
+      )
+    : (
+        req.targetCookName ||
+        req.target ||
+        req.targetCookEmail ||
+        '未知'
+      );
 
-    const senderEmail = req.senderEmail || '';
-    const targetCookEmail = req.targetCookEmail || '';
+const senderEmail = req.senderEmail || '';
+
+const targetCookEmail =
+  req.requestType === 'fruit'
+    ? (req.targetPersonEmail || req.targetCookEmail || '')
+    : (req.targetCookEmail || '');
 
     if (!map.has(key)) {
       map.set(key, {
@@ -1880,10 +2062,17 @@ const getCookMessageKey = (req) => {
 // 注意：這裡用原始 requests，不用 uniqueRequests
 // 因為 inbox 要判斷是否有 request 傳給自己
 const incomingRequests = useMemo(() => {
-  return (requests || []).filter(req =>
-    req.targetCookEmail === email &&
-    req.status === 'pending'
-  );
+  return (requests || []).filter(req => {
+    const targetEmail =
+      req.requestType === 'fruit'
+        ? (req.targetPersonEmail || req.targetCookEmail)
+        : req.targetCookEmail;
+
+    return (
+      targetEmail === email &&
+      req.status === 'pending'
+    );
+  });
 }, [requests, email]);
 
 // 用途：目前登入者收到大廚改期 / 拒絕 / 取消通知
@@ -1964,9 +2153,24 @@ useEffect(() => {
 }, [appStage, senderNotifications.length]);
 
 // 用途：排序後的家庭動態 request
-// completed 已完成的排餐不再顯示在下方排餐動態，但仍會保留給月曆使用
+// completed / rejected 不顯示；pending / approved 顯示
+// fruit pending 也要顯示，讓發起人和全群組看到「等待回應」
 const sortedRequests = [...(uniqueRequests || [])]
-  .filter(req => req.status !== 'completed' && req.status !== 'rejected')
+  .filter(req => {
+    if (req.status === 'completed' || req.status === 'rejected') {
+      return false;
+    }
+
+    if (requestTypeFilter === 'dish') {
+      return req.requestType !== 'fruit';
+    }
+
+    if (requestTypeFilter === 'fruit') {
+      return req.requestType === 'fruit';
+    }
+
+    return true;
+  })
   .sort((a, b) => {
     const dateA = new Date(a.date || '').getTime();
     const dateB = new Date(b.date || '').getTime();
@@ -1992,7 +2196,11 @@ const sortedRequests = [...(uniqueRequests || [])]
 const approvedDates = Array.from(
   new Set(
     (uniqueRequests || [])
-      .filter(req => req.status === 'approved' && req.date)
+      .filter(req =>
+        req.requestType !== 'fruit' &&
+        req.status === 'approved' &&
+        req.date
+      )
       .map(req => normalizeDateString(req.date))
       .filter(Boolean)
   )
@@ -2002,7 +2210,11 @@ const approvedDates = Array.from(
 const completedDates = Array.from(
   new Set(
     (uniqueRequests || [])
-      .filter(req => req.status === 'completed' && req.date)
+      .filter(req =>
+        req.requestType !== 'fruit' &&
+        req.status === 'completed' &&
+        req.date
+      )
       .map(req => normalizeDateString(req.date))
       .filter(Boolean)
   )
@@ -2033,7 +2245,11 @@ const markCookMessageAsReadInFirebase = async (reqItem) => {
         dishId: targetReq.dishId || '',
         dishName: targetReq.dishName || '',
         ingredients: targetReq.ingredients || '',
-
+requestType: targetReq.requestType || 'dish',
+fruitId: targetReq.fruitId || '',
+fruitName: targetReq.fruitName || '',
+targetPersonEmail: targetReq.targetPersonEmail || '',
+targetPersonName: targetReq.targetPersonName || '',
         groupCode: targetReq.groupCode || groupInviteCode || '',
         familyGroupName: targetReq.familyGroupName || familyGroupName || '',
 
@@ -2053,8 +2269,14 @@ const markCookMessageAsReadInFirebase = async (reqItem) => {
         targetCookEmail: targetReq.targetCookEmail || '',
         targetCookName: targetReq.targetCookName || targetReq.target || '',
 
-        date: targetReq.date || '',
-        meal: targetReq.meal || '晚餐',
+        date:
+  targetReq.requestType === 'fruit'
+    ? ''
+    : (targetReq.date || ''),
+        meal:
+  targetReq.requestType === 'fruit'
+    ? ''
+    : (targetReq.meal || ''),
 
         status: targetReq.status || 'pending',
 
@@ -2158,6 +2380,33 @@ const openRequestModal = (dish, targetDateStr = null) => {
   setCookDropdownOpen(false);
   setMealDropdownOpen(false);
   setRequestModalVisible(true);
+};
+
+const openFruitRequestModal = (fruit, targetDateStr = null) => {
+  setSelectedFruit(fruit);
+
+  const allMembers = Array.isArray(groupMembers) ? groupMembers : [];
+
+  const lastTarget = allMembers.find(member =>
+    member.email && member.email === lastFruitTargetEmail
+  );
+
+  const defaultTarget =
+    lastTarget ||
+    allMembers.find(member => member.email === email) ||
+    allMembers[0];
+
+  if (defaultTarget) {
+    setFruitTargetName(defaultTarget.name || '');
+    setFruitTargetEmail(defaultTarget.email || '');
+  } else {
+    setFruitTargetName('');
+    setFruitTargetEmail('');
+  }
+
+setFruitAutoAddToList(lastAutoAddToList === true);
+setFruitTargetDropdownOpen(false);
+setFruitRequestModalVisible(true);
 };
 
 // 抽菜
@@ -2416,7 +2665,12 @@ useEffect(() => {
   }
 }, [appStage, groupInviteCode, email]);
 
-// 用途：eat 用戶送出想吃要求，寫入 Firebase requests collection
+//
+const isActiveRequestStatus = (status) => {
+  return ['pending', 'approved'].includes(status);
+};
+
+
 const sendRequest = async () => {
   try {
     if (!selectedDish) {
@@ -2539,6 +2793,7 @@ cookMessageReadByEmails: [],
       rescheduledByNickname: ''
     };
 
+
     await db.collection('requests').add(requestData);
 
     // 記住今次選項，下次打開「提出想吃」時沿用
@@ -2554,6 +2809,7 @@ await saveLastSelectionsToDevice({
   approveAdd: lastApproveAddToList
 });
 
+
     // 發起人自己選擇加入購物清單
    if (autoAddToList === true) {
   addToShoppingList(selectedDish.ingredients);
@@ -2567,7 +2823,147 @@ await saveLastSelectionsToDevice({
     showMessage('送出點菜要求失敗', error.message || String(error));
   }
 };
+//水果
+const sendFruitRequest = async () => {
+  try {
+    if (!selectedFruit) {
+      return showMessage('已選擇的水果不存在。');
+    }
 
+   
+    if (!fruitTargetName || !fruitTargetEmail) {
+      return showMessage('請選擇通知對象。');
+    }
+
+    if (!groupInviteCode) {
+      return showMessage('你目前未加入任何群組，不能送出水果要求。');
+    }
+
+
+    const isRequestToSelf =
+      fruitTargetEmail &&
+      email &&
+      fruitTargetEmail === email;
+
+const duplicateRequest = (requests || []).find(req =>
+  req.requestType === 'fruit' &&
+  req.groupCode === groupInviteCode &&
+  (req.fruitId || req.fruitName) === (selectedFruit.id || selectedFruit.name) &&
+  req.senderEmail === email &&
+  (req.targetPersonEmail || req.targetCookEmail) === fruitTargetEmail &&
+  isActiveRequestStatus(req.status)
+);
+
+
+    if (duplicateRequest) {
+      return showMessage('你已經送過相同的水果要求囉。');
+    }
+
+    const groupMemberEmails = (groupMembers || [])
+      .map(member => member.email)
+      .filter(Boolean);
+
+    if (email && !groupMemberEmails.includes(email)) {
+      groupMemberEmails.push(email);
+    }
+
+    if (fruitTargetEmail && !groupMemberEmails.includes(fruitTargetEmail)) {
+      groupMemberEmails.push(fruitTargetEmail);
+    }
+
+    const requestData = {
+      requestType: 'fruit',
+
+      fruitId: selectedFruit.id || '',
+      fruitName: selectedFruit.name || '',
+
+      // 保留這兩個欄位，方便舊 UI fallback
+      dishId: '',
+      dishName: selectedFruit.name || '',
+      ingredients: selectedFruit.name || '',
+
+      groupCode: groupInviteCode || '',
+      familyGroupName: familyGroupName || '',
+
+      groupMemberEmails: groupMemberEmails,
+      groupAdminEmails: Array.isArray(groupAdminEmails) ? groupAdminEmails : [],
+
+      senderEmail: email || '',
+      senderNickname: nickname || '',
+
+      // 水果用通知對象
+      targetPersonEmail: fruitTargetEmail || '',
+      targetPersonName: fruitTargetName || '',
+
+      // 同時保留舊欄位，減少現有 request 顯示爆掉
+      targetCookEmail: fruitTargetEmail || '',
+      targetCookName: fruitTargetName || '',
+
+date: '',
+meal: '',
+
+      status: isRequestToSelf ? 'approved' : 'pending',
+
+      autoAddToList: fruitAutoAddToList === true,
+      cookApprovedAddToList: false,
+
+      cookMessage: '',
+      rejectionReason: '',
+      rescheduleReason: '',
+      cookMessageReadByEmails: [],
+
+      createdAt: new Date(),
+      updatedAt: new Date(),
+
+      approvedAt: isRequestToSelf ? new Date() : '',
+      approvedByEmail: isRequestToSelf ? email : '',
+      approvedByNickname: isRequestToSelf ? nickname : '',
+
+      rejectedAt: '',
+      rejectedByEmail: '',
+      rejectedByNickname: '',
+
+      rescheduledAt: '',
+      rescheduledByEmail: '',
+      rescheduledByNickname: '',
+
+      completedAt: '',
+      completedByEmail: '',
+      completedByNickname: ''
+    };
+
+    await db.collection('requests').add(requestData);
+
+ const nextAutoAdd = fruitAutoAddToList === true;
+
+setLastAutoAddToList(nextAutoAdd);
+
+await saveLastSelectionsToDevice({
+  meal: lastSelectedMeal,
+  autoAdd: nextAutoAdd,
+  approveAdd: lastApproveAddToList
+});
+
+    setLastFruitTargetEmail(fruitTargetEmail);
+    setLastFruitTargetName(fruitTargetName);
+
+    await saveLastFruitSelectionToDevice({
+      targetEmail: fruitTargetEmail,
+      targetName: fruitTargetName
+    });
+
+    if (fruitAutoAddToList === true) {
+      addToShoppingList(selectedFruit.name);
+    }
+
+    await loadRequestsFromFirebase();
+
+    setFruitRequestModalVisible(false);
+  } catch (error) {
+    console.log('sendFruitRequest error:', error);
+    showMessage('送出水果要求失敗', error.message || String(error));
+  }
+};
 
 // 用途：cook 同意點菜要求；如果畫面合併了多個相同 request，就一次全部同意
 // 同意時可選擇是否把材料加入購物清單
@@ -2589,7 +2985,11 @@ const handleApproveRequest = async (idOrIds) => {
         dishId: targetReq.dishId || '',
         dishName: targetReq.dishName || '',
         ingredients: targetReq.ingredients || '',
-
+requestType: targetReq.requestType || 'dish',
+fruitId: targetReq.fruitId || '',
+fruitName: targetReq.fruitName || '',
+targetPersonEmail: targetReq.targetPersonEmail || '',
+targetPersonName: targetReq.targetPersonName || '',
         groupCode: targetReq.groupCode || groupInviteCode || '',
         familyGroupName: targetReq.familyGroupName || familyGroupName || '',
 
@@ -2610,8 +3010,14 @@ const handleApproveRequest = async (idOrIds) => {
         targetCookEmail: targetReq.targetCookEmail || '',
         targetCookName: targetReq.targetCookName || targetReq.target || '',
 
-        date: targetReq.date || '',
-        meal: targetReq.meal || '晚餐',
+        date:
+  targetReq.requestType === 'fruit'
+    ? ''
+    : (targetReq.date || ''),
+        meal:
+  targetReq.requestType === 'fruit'
+    ? ''
+    : (targetReq.meal || ''),
 
         status: 'approved',
 
@@ -2677,6 +3083,20 @@ showMessage('已同意該點菜要求。');
     showMessage('同意點菜要求失敗', error.message || String(error));
   }
 };
+
+//fruit
+const isRejectTargetFruit = () => {
+  if (rejectTargetRequest?.requestType === 'fruit') return true;
+
+  const ids = Array.isArray(rejectTargetRequest?.mergedRequestIds)
+    ? rejectTargetRequest.mergedRequestIds
+    : [rejectTargetRequest?.id];
+
+  return (requests || []).some(req =>
+    ids.includes(req.id) &&
+    req.requestType === 'fruit'
+  );
+};
 // 用途：打開拒絕 / 取消點菜要求視窗
 // 大廚可以額外寫訊息給發起人，也可以留空只傳官方通知
 const openRejectModal = (req) => {
@@ -2719,12 +3139,16 @@ const handleRejectRequest = async (reqItem, reason = '') => {
       return showMessage('此點菜要求不存在。');
     }
 
-const cookDisplayName = nickname || email || '大廚';
+const actionDisplayName = nickname || email || '對方';
 
-const officialNotice = `${cookDisplayName}已拒絕此點菜要求。`;
+const isFruitRequest = targetRequests[0]?.requestType === 'fruit';
+
+const officialNotice = isFruitRequest
+  ? `${actionDisplayName}已取消此水果要求。`
+  : `${actionDisplayName}已拒絕此點菜要求。`;
 
 const finalMessage = reason
-  ? `${officialNotice}\n${cookDisplayName}留言：${reason}`
+  ? `${officialNotice}\n${actionDisplayName}留言：${reason}`
   : officialNotice;
 
     for (const targetReq of targetRequests) {
@@ -2732,7 +3156,11 @@ const finalMessage = reason
         dishId: targetReq.dishId || '',
         dishName: targetReq.dishName || '',
         ingredients: targetReq.ingredients || '',
-
+requestType: targetReq.requestType || 'dish',
+fruitId: targetReq.fruitId || '',
+fruitName: targetReq.fruitName || '',
+targetPersonEmail: targetReq.targetPersonEmail || '',
+targetPersonName: targetReq.targetPersonName || '',
         groupCode: targetReq.groupCode || groupInviteCode || '',
         familyGroupName: targetReq.familyGroupName || familyGroupName || '',
 
@@ -2752,8 +3180,14 @@ const finalMessage = reason
         targetCookEmail: targetReq.targetCookEmail || '',
         targetCookName: targetReq.targetCookName || targetReq.target || '',
 
-        date: targetReq.date || '',
-        meal: targetReq.meal || '晚餐',
+        date:
+  targetReq.requestType === 'fruit'
+    ? ''
+    : (targetReq.date || ''),
+        meal:
+  targetReq.requestType === 'fruit'
+    ? ''
+    : (targetReq.meal || ''),
 
         status: 'rejected',
 
@@ -2823,7 +3257,11 @@ const handleCompleteRequest = async (idOrIds) => {
         dishId: targetReq.dishId || '',
         dishName: targetReq.dishName || '',
         ingredients: targetReq.ingredients || '',
-
+requestType: targetReq.requestType || 'dish',
+fruitId: targetReq.fruitId || '',
+fruitName: targetReq.fruitName || '',
+targetPersonEmail: targetReq.targetPersonEmail || '',
+targetPersonName: targetReq.targetPersonName || '',
         groupCode: targetReq.groupCode || groupInviteCode || '',
         familyGroupName: targetReq.familyGroupName || familyGroupName || '',
 
@@ -2843,8 +3281,14 @@ const handleCompleteRequest = async (idOrIds) => {
         targetCookEmail: targetReq.targetCookEmail || '',
         targetCookName: targetReq.targetCookName || targetReq.target || '',
 
-        date: targetReq.date || '',
-        meal: targetReq.meal || '晚餐',
+        date:
+  targetReq.requestType === 'fruit'
+    ? ''
+    : (targetReq.date || ''),
+        meal:
+  targetReq.requestType === 'fruit'
+    ? ''
+    : (targetReq.meal || ''),
 
         // 重要：標記已完成
         status: 'completed',
@@ -2896,9 +3340,13 @@ const getCurrentGroupMemberEmails = () => {
     emails.push(email);
   }
 
-  if (targetCookEmail && !emails.includes(targetCookEmail)) {
-    emails.push(targetCookEmail);
-  }
+if (targetCookEmail && !emails.includes(targetCookEmail)) {
+  emails.push(targetCookEmail);
+}
+
+if (fruitTargetEmail && !emails.includes(fruitTargetEmail)) {
+  emails.push(fruitTargetEmail);
+}
 
   return emails;
 };
@@ -2980,7 +3428,11 @@ if (isPastDate(normalizedDate)) {
         dishId: targetReq.dishId || '',
         dishName: targetReq.dishName || '',
         ingredients: targetReq.ingredients || '',
-
+requestType: targetReq.requestType || 'dish',
+fruitId: targetReq.fruitId || '',
+fruitName: targetReq.fruitName || '',
+targetPersonEmail: targetReq.targetPersonEmail || '',
+targetPersonName: targetReq.targetPersonName || '',
         groupCode: targetReq.groupCode || groupInviteCode || '',
         familyGroupName: targetReq.familyGroupName || familyGroupName || '',
 
@@ -3646,7 +4098,36 @@ const availableDishes = useMemo(() => {
   });
 }, [dishes, groupInviteCode, email]);
 
-// 用途：分頁 1 實際顯示 / 搜尋 / 標籤篩選後的菜式
+const availableFruits = useMemo(() => {
+  return (fruits || []).filter(fruit => {
+    const status = String(
+      fruit.publishStatus ?? (fruit.isPublic ? 'approved' : 'private')
+    ).trim().toLowerCase();
+
+    const hiddenForGroups = Array.isArray(fruit.hiddenForGroups)
+      ? fruit.hiddenForGroups
+      : [];
+
+    if (groupInviteCode && hiddenForGroups.includes(groupInviteCode)) {
+      return false;
+    }
+
+    if (status === 'approved') return true;
+
+    if (status === 'private') {
+      return fruit.groupCode === groupInviteCode;
+    }
+
+    if (status === 'pending') {
+      return fruit.createdByEmail === email;
+    }
+
+    return false;
+  });
+}, [fruits, groupInviteCode, email]);
+
+
+// 用途：分頁1 實際顯示 / 搜尋 / 標籤篩選後的菜式
 // 重要：抽籤也應該用這個結果，才會跟搜尋和標籤同步
 const displayedDishes = useMemo(() => {
   const keyword = String(searchQuery || '').trim().toLowerCase();
@@ -3726,7 +4207,291 @@ const toggleDishHideSelection = (dishId) => {
   );
 };
 
+// 用途：從 Firebase 重新載入所有水果資料
+const loadFruits = async () => {
+  try {
+    const allFruits = await db.collection('fruits').getAll();
 
+    const safeFruits = Array.isArray(allFruits) ? allFruits : [];
+
+    // 如果 Firebase 未有水果，就先顯示內置預設水果
+    setFruits(safeFruits.length > 0 ? safeFruits : INITIAL_FRUITS);
+
+    console.log('已從 Firebase 載入 fruits:', allFruits);
+  } catch (error) {
+    console.log('loadFruits error:', error);
+
+    // Firebase 失敗時仍顯示預設水果，避免空白
+    setFruits(INITIAL_FRUITS);
+  }
+};
+
+useEffect(() => {
+  if (appStage === 'main') {
+    loadFruits();
+  }
+}, [appStage]);
+const displayedFruits = useMemo(() => {
+  const keyword = String(fruitSearchQuery || '').trim().toLowerCase();
+  const safeSelectedSeasons = Array.isArray(selectedFruitSeasons)
+    ? selectedFruitSeasons
+    : [];
+
+  return (availableFruits || []).filter(fruit => {
+    const fruitName = String(fruit.name || '').toLowerCase();
+    const seasons = Array.isArray(fruit.seasons) ? fruit.seasons : [];
+    const seasonsText = seasons.join(' ').toLowerCase();
+
+    const matchKeyword =
+      !keyword ||
+      fruitName.includes(keyword) ||
+      seasonsText.includes(keyword);
+
+    const matchSeasons =
+      safeSelectedSeasons.length === 0 ||
+      safeSelectedSeasons.some(season => seasons.includes(season));
+
+    return matchKeyword && matchSeasons;
+  });
+}, [availableFruits, fruitSearchQuery, selectedFruitSeasons]);
+
+const hiddenFruitsForCurrentGroup = useMemo(() => {
+  return (fruits || []).filter(fruit => {
+    const hiddenForGroups = Array.isArray(fruit.hiddenForGroups)
+      ? fruit.hiddenForGroups
+      : [];
+
+    return groupInviteCode && hiddenForGroups.includes(groupInviteCode);
+  });
+}, [fruits, groupInviteCode]);
+const editableDisplayedFruits = useMemo(() => {
+  const baseFruits = Array.isArray(displayedFruits)
+    ? displayedFruits
+    : Array.isArray(availableFruits)
+      ? availableFruits
+      : [];
+
+  const keyword = fruitSearchQuery.trim().toLowerCase();
+
+  if (!isFruitEditMode) {
+    return baseFruits;
+  }
+
+  if (!keyword) {
+    return baseFruits;
+  }
+
+  return baseFruits.filter(fruit => {
+    const name = String(fruit.name || '').toLowerCase();
+    const seasons = Array.isArray(fruit.seasons)
+      ? fruit.seasons.join(' ').toLowerCase()
+      : '';
+
+    return name.includes(keyword) || seasons.includes(keyword);
+  });
+}, [displayedFruits, availableFruits, fruitSearchQuery, isFruitEditMode]);
+
+const toggleFruitHideSelection = (fruitId) => {
+  if (!fruitId) return;
+
+  setSelectedFruitIdsForHide(prev =>
+    prev.includes(fruitId)
+      ? prev.filter(id => id !== fruitId)
+      : [...prev, fruitId]
+  );
+};
+
+const canPermanentlyDeleteFruitFromGroup = (fruit) => {
+  if (!fruit) return false;
+
+  const status = String(
+    fruit.publishStatus ?? (fruit.isPublic ? 'approved' : 'private')
+  ).trim().toLowerCase();
+
+  const isCreatedByMe = fruit.createdByEmail === email;
+  const isFromCurrentGroup = fruit.groupCode === groupInviteCode;
+  const isApprovedPublic = status === 'approved' || fruit.isPublic === true;
+
+  return isCreatedByMe && isFromCurrentGroup && !isApprovedPublic;
+};
+
+const handleAdminHideSelectedFruits = async () => {
+  try {
+    if (!isCurrentUserAdmin) {
+      return showMessage('只有管理員可以管理水果庫。');
+    }
+
+    if (!groupInviteCode) {
+      return showMessage('沒有此群組。');
+    }
+
+    if (selectedFruitIdsForHide.length === 0) {
+      return showMessage('請先勾選要處理的水果。');
+    }
+
+    const targetFruits = (editableDisplayedFruits || []).filter(fruit =>
+      selectedFruitIdsForHide.includes(fruit.id)
+    );
+
+    if (targetFruits.length === 0) {
+      return showMessage('已選水果不存在。');
+    }
+
+    const deletedFruitIds = [];
+    const hiddenFruitUpdates = [];
+
+    for (const fruit of targetFruits) {
+      if (!fruit?.id) continue;
+
+      if (canPermanentlyDeleteFruitFromGroup(fruit)) {
+        await db.collection('fruits').delete(fruit.id);
+        deletedFruitIds.push(fruit.id);
+        continue;
+      }
+
+      const oldHiddenGroups = Array.isArray(fruit.hiddenForGroups)
+        ? fruit.hiddenForGroups
+        : [];
+
+      const updatedHiddenGroups = oldHiddenGroups.includes(groupInviteCode)
+        ? oldHiddenGroups
+        : [...oldHiddenGroups, groupInviteCode];
+
+      await db.collection('fruits').update(fruit.id, {
+        name: fruit.name || '',
+        seasons: Array.isArray(fruit.seasons) ? fruit.seasons : [],
+        createdByEmail: fruit.createdByEmail || '',
+        createdByNickname: fruit.createdByNickname || '',
+        familyGroupName: fruit.familyGroupName || '',
+        groupCode: fruit.groupCode || '',
+        isPublic: fruit.isPublic || false,
+        requestedPublic: fruit.requestedPublic || false,
+        publishStatus: fruit.publishStatus || (fruit.isPublic ? 'approved' : 'private'),
+        hiddenForGroups: updatedHiddenGroups,
+        createdAt: fruit.createdAt || new Date(),
+        updatedAt: new Date()
+      });
+
+      hiddenFruitUpdates.push({
+        id: fruit.id,
+        hiddenForGroups: updatedHiddenGroups
+      });
+    }
+
+    setFruits(prev =>
+      prev
+        .filter(fruit => !deletedFruitIds.includes(fruit.id))
+        .map(fruit => {
+          const update = hiddenFruitUpdates.find(item => item.id === fruit.id);
+
+          if (!update) return fruit;
+
+          return {
+            ...fruit,
+            hiddenForGroups: update.hiddenForGroups
+          };
+        })
+    );
+
+    setSelectedFruitIdsForHide([]);
+  } catch (error) {
+    console.log('handleAdminHideSelectedFruits error:', error);
+    showMessage('操作失敗', error.message || String(error));
+  }
+};
+
+const handleAdminRestoreHiddenFruit = async (fruit) => {
+  try {
+    if (!isCurrentUserAdmin) {
+      return showMessage('沒有權限還原水果。');
+    }
+
+    if (!groupInviteCode) {
+      return showMessage('沒有此群組。');
+    }
+
+    const oldHiddenGroups = Array.isArray(fruit.hiddenForGroups)
+      ? fruit.hiddenForGroups
+      : [];
+
+    const updatedHiddenGroups = oldHiddenGroups.filter(code => code !== groupInviteCode);
+
+    await db.collection('fruits').update(fruit.id, {
+      name: fruit.name || '',
+      seasons: Array.isArray(fruit.seasons) ? fruit.seasons : [],
+      createdByEmail: fruit.createdByEmail || '',
+      createdByNickname: fruit.createdByNickname || '',
+      familyGroupName: fruit.familyGroupName || '',
+      groupCode: fruit.groupCode || '',
+      isPublic: fruit.isPublic || false,
+      requestedPublic: fruit.requestedPublic || false,
+      publishStatus: fruit.publishStatus || (fruit.isPublic ? 'approved' : 'private'),
+      hiddenForGroups: updatedHiddenGroups,
+      createdAt: fruit.createdAt || new Date(),
+      updatedAt: new Date()
+    });
+
+    setFruits(prev =>
+      prev.map(item =>
+        item.id === fruit.id
+          ? { ...item, hiddenForGroups: updatedHiddenGroups }
+          : item
+      )
+    );
+  } catch (error) {
+    console.log('handleAdminRestoreHiddenFruit error:', error);
+    showMessage('還原失敗', error.message || String(error));
+  }
+};
+
+const handleAddFruit = async () => {
+  try {
+    if (!newFruitName || !newFruitName.trim()) {
+      return showMessage('請輸入水果名稱');
+    }
+
+    if (!Array.isArray(newFruitSeasons) || newFruitSeasons.length === 0) {
+      return showMessage('請選擇水果季節標籤。');
+    }
+
+    const fruitData = {
+      name: newFruitName.trim(),
+      seasons: newFruitSeasons,
+
+      createdByEmail: email,
+      createdByNickname: nickname || '',
+
+      familyGroupName: familyGroupName || '',
+      groupCode: groupInviteCode || '',
+
+      isPublic: false,
+      requestedPublic: newFruitIsPublic,
+      publishStatus: newFruitIsPublic ? 'pending' : 'private',
+
+      hiddenForGroups: [],
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const result = await db.collection('fruits').add(fruitData);
+
+    const localFruit = {
+      id: result.name ? result.name.split('/').pop() : Date.now().toString(),
+      ...fruitData
+    };
+
+    setFruits(prev => [localFruit, ...prev]);
+
+    setNewFruitName('');
+    setNewFruitSeasons([]);
+    setNewFruitIsPublic(false);
+    setHomeSubPage('fruits');
+    setCurrentTab('home');
+  } catch (error) {
+    console.log('handleAddFruit error:', error);
+    showMessage('儲存水果失敗', error.message || String(error));
+  }
+};
 // 用途：admin 在家庭菜餚庫編輯模式下，隱藏單一菜式
 // 注意：這裡是「從目前群組隱藏」，不是刪除 Firebase 菜式
 const handleAdminRemoveDishFromGroup = async (dish) => {
@@ -4043,10 +4808,11 @@ const handleCellPress = (day) => {
   // 用途：找出這一天所有已確認或已完成的排餐
   // approved = 未完成但已同意
   // completed = 已完成
-  const mealRecords = (uniqueRequests || []).filter(r =>
-    normalizeDateString(r.date) === clickedDate &&
-    (r.status === 'approved' || r.status === 'completed')
-  );
+const mealRecords = (uniqueRequests || []).filter(r =>
+  r.requestType !== 'fruit' &&
+  normalizeDateString(r.date) === clickedDate &&
+  (r.status === 'approved' || r.status === 'completed')
+);
 
   // 如果這天有排餐紀錄，即使是過去日期，都可以查看
   if (mealRecords.length > 0) {
@@ -4063,7 +4829,9 @@ const handleCellPress = (day) => {
               ? '✅ 已完成'
               : '🟢 未完成';
 
-          return `• ${statusText}｜[${r.meal}] ${r.dishName} (${cooks} 掌廚)`;
+          return r.requestType === 'fruit'
+  ? `• ${statusText}｜[${r.meal}] 🍎 ${r.fruitName || r.dishName} (${cooks} 通知對象)`
+  : `• ${statusText}｜[${r.meal}] ${r.dishName} (${cooks} 掌廚)`;
         })
         .join('\n')
     );
@@ -4113,7 +4881,27 @@ const renderTagButtons = (tags, currentSelected, onToggle) => {
     );
   });
 };
-
+const renderSubTabButton = (label, isActive, onPress) => {
+  return (
+    <TouchableOpacity
+      style={[
+        styles.subTabButton,
+        isActive && styles.subTabButtonActive
+      ]}
+      onPress={onPress}
+      activeOpacity={0.85}
+    >
+      <Text
+        style={[
+          styles.subTabButtonText,
+          isActive && styles.subTabButtonTextActive
+        ]}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+};
 
   const addToShoppingList = (ingredientsString) => {
     if (!ingredientsString || ingredientsString === '未填寫') return;
@@ -4144,7 +4932,7 @@ const renderTagButtons = (tags, currentSelected, onToggle) => {
 
 
 
-      {/* ================= 各種 Modals ================= */}
+// ================= 各種 Modals =================
 
       
 // 用途：App 開啟時先檢查是否有已儲存登入；未檢查完之前先不顯示 login
@@ -4434,92 +5222,130 @@ return (
 {/* ================= 分頁 1: 首頁 ================= */}
 {currentTab === 'home' && (
   <View style={styles.pageContent}>
+    {/* 內部分頁切換：菜式 / 水果 */}
+ <View style={styles.subTabContainer}>
+  {renderSubTabButton(
+    '菜式庫',
+    homeSubPage === 'dishes',
+    () => {
+      setHomeSubPage('dishes');
+      setIsFruitEditMode(false);
+      setSelectedFruitIdsForHide([]);
+    }
+  )}
 
-    {/* 收到點菜要求提示 */}
+  {renderSubTabButton(
+    '水果庫',
+    homeSubPage === 'fruits',
+    () => {
+      setHomeSubPage('fruits');
+      setIsDishEditMode(false);
+      setSelectedDishIdsForHide([]);
+    }
+  )}
+</View>
+    {/* 收到點菜 / 水果要求提示 */}
     {incomingRequests.length > 0 && (
       <TouchableOpacity
         style={styles.noticeButton}
         onPress={() => setRequestInboxVisible(true)}
       >
         <Text style={styles.noticeText}>
-          📨 你有 {incomingRequests.length} 個待處理點菜要求
+          📨 你有 {incomingRequests.length} 個待處理要求
         </Text>
       </TouchableOpacity>
     )}
 
-    {/* 隨機抽菜 */}
-    <TouchableOpacity style={styles.luckyDrawButton} onPress={handleDraw}>
-      <Text style={styles.luckyDrawButtonText}>
-        ✨ 🔮 隨機食乜都好 🔮 ✨
-      </Text>
-    </TouchableOpacity>
+    {/* ================= 菜式專頁 ================= */}
+    {homeSubPage === 'dishes' && (
+      <>
+ 
 
-    {/* 篩選與搜尋 */}
-    <View style={styles.searchSectionCard}>
-      <Text style={styles.sectionTitleSmall}>🔍 搜尋菜式</Text>
+        {/* 篩選與搜尋 */}
+        <View style={styles.searchSectionCard}>
+          <Text style={styles.sectionTitleSmall}>🔍 搜尋菜式</Text>
 
-      <TextInput
-        style={styles.input}
-        placeholderTextColor="#B8A89A"
-        value={searchQuery}
-        onChangeText={setSearchQuery}
-      />
+          <TextInput
+            style={styles.input}
+            placeholderTextColor="#B8A89A"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+          />
 
-      {/* === 功能按鈕列 === */}
-      <View style={styles.toolbarRow}>
-        <TouchableOpacity
-          style={[styles.smallActionButton, styles.neutralActionButton, { marginRight: 8 }]}
-          onPress={() => setSelectedTags([])}
-        >
-          <Text style={styles.smallActionButtonText}>
-            🧹 清空選取 ({selectedTags.length})
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.smallActionButton, styles.infoActionButton]}
-          onPress={() => setCustomModalVisible(true)}
-        >
-          <Text style={styles.smallActionButtonText}>
-            ⚙️ 管理標籤
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* 分類 / 標籤 */}
-      {getSortedCategoryKeys().map(key => {
-        const category = dynamicCategories[key];
-        const isExpanded = expandedCategories[key];
-
-        return (
-          <View key={key} style={styles.categoryBlock}>
+          <View style={styles.toolbarRow}>
             <TouchableOpacity
-              style={styles.accordionHeader}
-              onPress={() => toggleCategoryExpand(key)}
+              style={[
+                styles.smallActionButton,
+                styles.neutralActionButton,
+                { marginRight: 8 }
+              ]}
+              onPress={() => setSelectedTags([])}
             >
-              <Text style={styles.categoryLabel}>{category.title}</Text>
-
-              <Text style={styles.searchHintText}>
-                {isExpanded ? '🔼 收起' : '🔍 展開'}
+              <Text style={styles.smallActionButtonText}>
+                🧹 清空選取 ({selectedTags.length})
               </Text>
             </TouchableOpacity>
 
-            {isExpanded && (
-              <View style={styles.categoryContent}>
-                {category.isNested ? (
-                  getSortedSubCategoryKeys(key).map(subKey => (
-                    <View key={subKey} style={styles.subCategoryBlock}>
-                      <Text style={styles.subCategoryLabel}>
-                        └ {category.subCategories[subKey].title}
-                      </Text>
+            <TouchableOpacity
+              style={[styles.smallActionButton, styles.infoActionButton]}
+              onPress={() => setCustomModalVisible(true)}
+            >
+              <Text style={styles.smallActionButtonText}>
+                ⚙️ 管理標籤
+              </Text>
+            </TouchableOpacity>
+          </View>
 
+          {/* 分類 / 標籤 */}
+          {getSortedCategoryKeys().map(key => {
+            const category = dynamicCategories[key];
+            const isExpanded = expandedCategories[key];
+
+            return (
+              <View key={key} style={styles.categoryBlock}>
+                <TouchableOpacity
+                  style={styles.accordionHeader}
+                  onPress={() => toggleCategoryExpand(key)}
+                >
+                  <Text style={styles.categoryLabel}>{category.title}</Text>
+
+                  <Text style={styles.searchHintText}>
+                    {isExpanded ? '🔼 收起' : '🔍 展開'}
+                  </Text>
+                </TouchableOpacity>
+
+                {isExpanded && (
+                  <View style={styles.categoryContent}>
+                    {category.isNested ? (
+                      getSortedSubCategoryKeys(key).map(subKey => (
+                        <View key={subKey} style={styles.subCategoryBlock}>
+                          <Text style={styles.subCategoryLabel}>
+                            └ {category.subCategories[subKey].title}
+                          </Text>
+
+                          <View style={styles.tagContainer}>
+                            {renderTagButtons(
+                              getSortedTags(
+                                category.subCategories[subKey].tags,
+                                key,
+                                subKey
+                              ),
+                              selectedTags,
+                              (tag) => {
+                                setSelectedTags(prev =>
+                                  prev.includes(tag)
+                                    ? prev.filter(t => t !== tag)
+                                    : [...prev, tag]
+                                );
+                              }
+                            )}
+                          </View>
+                        </View>
+                      ))
+                    ) : (
                       <View style={styles.tagContainer}>
                         {renderTagButtons(
-                          getSortedTags(
-                            category.subCategories[subKey].tags,
-                            key,
-                            subKey
-                          ),
+                          getSortedTags(category.tags, key),
                           selectedTags,
                           (tag) => {
                             setSelectedTags(prev =>
@@ -4530,184 +5356,356 @@ return (
                           }
                         )}
                       </View>
-                    </View>
-                  ))
-                ) : (
-                  <View style={styles.tagContainer}>
-                    {renderTagButtons(
-                      getSortedTags(category.tags, key),
-                      selectedTags,
-                      (tag) => {
-                        setSelectedTags(prev =>
-                          prev.includes(tag)
-                            ? prev.filter(t => t !== tag)
-                            : [...prev, tag]
-                        );
-                      }
                     )}
                   </View>
                 )}
               </View>
-            )}
-          </View>
-        );
-      })}
-    </View>
-
-    {/* 家庭菜餚庫標題 + 編輯按鈕 */}
-    <View style={styles.sectionHeaderRow}>
-      <Text style={styles.sectionTitle}>
-        📋 家庭菜餚庫 ({(editableDisplayedDishes || []).length}個結果)
-      </Text>
-
-      {isCurrentUserAdmin && (
-        <TouchableOpacity
-          style={[
-            styles.editToggleButton,
-            isDishEditMode && styles.editToggleButtonActive
-          ]}
-          onPress={() => {
-            if (isDishEditMode) {
-              setDishEditSearchQuery('');
-              setSelectedDishIdsForHide([]);
-            }
-
-            setIsDishEditMode(prev => !prev);
-          }}
-        >
-          <Text style={styles.editToggleButtonText}>
-            {isDishEditMode ? '完成' : '編輯'}
+            );
+          })}
+        </View>
+       {/* 隨機抽菜 */}
+        <TouchableOpacity style={styles.luckyDrawButton} onPress={handleDraw}>
+          <Text style={styles.luckyDrawButtonText}>
+            ✨ 🔮 隨機食乜都好 🔮 ✨
           </Text>
         </TouchableOpacity>
-      )}
-    </View>
+        {/* 菜式庫標題 + 編輯按鈕 */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>
+            📋 菜式庫
+          </Text>
 
-    {/* 編輯模式操作區 */}
-    {isDishEditMode && isCurrentUserAdmin && (
-      <View style={styles.editToolbar}>
-        <Text style={styles.editToolbarHint}>
-          可先在上面篩選菜式標籤。
-        </Text>
-
-        <View style={styles.editToolbarButtonGroup}>
-          <View style={styles.editToolbarRow}>
+          {isCurrentUserAdmin && (
             <TouchableOpacity
               style={[
-                styles.editMainActionButton,
-                selectedDishIdsForHide.length > 0
-                  ? styles.dangerActionButton
-                  : styles.disabledActionButton,
-                { marginRight: 8 }
+                styles.editToggleButton,
+                isDishEditMode && styles.editToggleButtonActive
               ]}
-              disabled={selectedDishIdsForHide.length === 0}
-              onPress={handleAdminHideSelectedDishes}
+              onPress={() => {
+                if (isDishEditMode) {
+                  setDishEditSearchQuery('');
+                  setSelectedDishIdsForHide([]);
+                }
+
+                setIsDishEditMode(prev => !prev);
+              }}
             >
-              <Text style={styles.editMainActionText}>
-                🧹 一鍵處理 ({selectedDishIdsForHide.length})
+              <Text style={styles.editToggleButtonText}>
+                {isDishEditMode ? '完成' : '編輯'}
               </Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.clearSelectionButton}
-              onPress={() => setSelectedDishIdsForHide([])}
-            >
-              <Text style={styles.clearSelectionText}>
-                清空
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          <TouchableOpacity
-            style={styles.hiddenManageButton}
-            onPress={() => setHiddenDishesModalVisible(true)}
-          >
-            <Text style={styles.hiddenManageButtonText}>
-              🙈 管理已隱藏菜式 ({(hiddenDishesForCurrentGroup || []).length})
-            </Text>
-          </TouchableOpacity>
+          )}
         </View>
-      </View>
-    )}
 
-    {/* 家庭菜餚庫列表 */}
-    {(editableDisplayedDishes || []).map(dish => {
-      const status = String(
-        dish.publishStatus ?? (dish.isPublic ? 'approved' : 'private')
-      ).trim().toLowerCase();
+        {/* 菜式編輯模式操作區 */}
+        {isDishEditMode && isCurrentUserAdmin && (
+          <View style={styles.editToolbar}>
+            <Text style={styles.editToolbarHint}>
+              可先在上面篩選菜式標籤。
+            </Text>
 
-      const isSelectedForHide = selectedDishIdsForHide.includes(dish.id);
-
-      return (
-        <TouchableOpacity
-          key={dish.id}
-          style={[
-            styles.dishCardSelectable,
-            isDishEditMode &&
-              isCurrentUserAdmin &&
-              isSelectedForHide &&
-              styles.dishCardSelected
-          ]}
-          onPress={() => {
-            // 編輯模式：點整張卡 = 勾選 / 取消勾選
-            if (isDishEditMode && isCurrentUserAdmin) {
-              toggleDishHideSelection(dish.id);
-              return;
-            }
-
-            // 非編輯模式：正常點菜
-            openRequestModal(dish, customDateInput);
-          }}
-        >
-          <View style={styles.dishCardRow}>
-            {/* 編輯模式 checkbox */}
-            {isDishEditMode && isCurrentUserAdmin && (
-              <View
-                style={[
-                  styles.checkboxBox,
-                  isSelectedForHide && styles.checkboxBoxSelected
-                ]}
-              >
-                <Text style={styles.checkboxTick}>
-                  {isSelectedForHide ? '✓' : ''}
-                </Text>
-              </View>
-            )}
-
-            <View style={styles.dishCardContent}>
-              <View style={styles.dishCardHeader}>
-                <Text style={styles.dishName}>{dish.name}</Text>
-
-                <Text
+            <View style={styles.editToolbarButtonGroup}>
+              <View style={styles.editToolbarRow}>
+                <TouchableOpacity
                   style={[
-                    styles.dishStatusText,
-                    status === 'approved' && styles.dishStatusApproved,
-                    status === 'pending' && styles.dishStatusPending,
-                    status === 'private' && styles.dishStatusPrivate
+                    styles.editMainActionButton,
+                    selectedDishIdsForHide.length > 0
+                      ? styles.dangerActionButton
+                      : styles.disabledActionButton,
+                    { marginRight: 8 }
                   ]}
+                  disabled={selectedDishIdsForHide.length === 0}
+                  onPress={handleAdminHideSelectedDishes}
                 >
-                  {status === 'approved'
-                    ? '🌐 公開'
-                    : status === 'pending'
-                      ? '⏳ 待確認'
-                      : '🔒 私房'}
-                </Text>
+                  <Text style={styles.editMainActionText}>
+                    🧹 一鍵處理 ({selectedDishIdsForHide.length})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.clearSelectionButton}
+                  onPress={() => setSelectedDishIdsForHide([])}
+                >
+                  <Text style={styles.clearSelectionText}>
+                    清空
+                  </Text>
+                </TouchableOpacity>
               </View>
 
-              <Text style={styles.dishDetails}>
-                材料: {dish.ingredients} | 分類: {Array.isArray(dish.tags) ? dish.tags.join(', ') : ''}
-              </Text>
-
-              {!isDishEditMode && (
-                <Text style={styles.clickHint}>
-                  👉 我要食呢個
+              <TouchableOpacity
+                style={styles.hiddenManageButton}
+                onPress={() => setHiddenDishesModalVisible(true)}
+              >
+                <Text style={styles.hiddenManageButtonText}>
+                  🙈 管理已隱藏菜式 ({(hiddenDishesForCurrentGroup || []).length})
                 </Text>
-              )}
+              </TouchableOpacity>
             </View>
           </View>
-        </TouchableOpacity>
-      );
-    })}
+        )}
 
+        {/* 菜式庫列表 */}
+        {(editableDisplayedDishes || []).map(dish => {
+          const status = String(
+            dish.publishStatus ?? (dish.isPublic ? 'approved' : 'private')
+          ).trim().toLowerCase();
+
+          const isSelectedForHide = selectedDishIdsForHide.includes(dish.id);
+
+          return (
+            <TouchableOpacity
+              key={dish.id}
+              style={[
+                styles.dishCardSelectable,
+                isDishEditMode &&
+                  isCurrentUserAdmin &&
+                  isSelectedForHide &&
+                  styles.dishCardSelected
+              ]}
+              onPress={() => {
+                if (isDishEditMode && isCurrentUserAdmin) {
+                  toggleDishHideSelection(dish.id);
+                  return;
+                }
+
+                openRequestModal(dish, customDateInput);
+              }}
+            >
+              <View style={styles.dishCardRow}>
+                {isDishEditMode && isCurrentUserAdmin && (
+                  <View
+                    style={[
+                      styles.checkboxBox,
+                      isSelectedForHide && styles.checkboxBoxSelected
+                    ]}
+                  >
+                    <Text style={styles.checkboxTick}>
+                      {isSelectedForHide ? '✓' : ''}
+                    </Text>
+                  </View>
+                )}
+
+                <View style={styles.dishCardContent}>
+                  <View style={styles.dishCardHeader}>
+                    <Text style={styles.dishName}>{dish.name}</Text>
+
+                    <Text
+                      style={[
+                        styles.dishStatusText,
+                        status === 'approved' && styles.dishStatusApproved,
+                        status === 'pending' && styles.dishStatusPending,
+                        status === 'private' && styles.dishStatusPrivate
+                      ]}
+                    >
+                      {status === 'approved'
+                        ? '🌐 公開'
+                        : status === 'pending'
+                          ? '⏳ 待確認'
+                          : '🔒 私房'}
+                    </Text>
+                  </View>
+
+                  <Text style={styles.dishDetails}>
+                    材料: {dish.ingredients} | 分類: {Array.isArray(dish.tags) ? dish.tags.join(', ') : ''}
+                  </Text>
+
+                  {!isDishEditMode && (
+                    <Text style={styles.clickHint}>
+                      👉 我要食呢個
+                    </Text>
+                  )}
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </>
+    )}
+
+    {/* ================= 水果專頁 ================= */}
+    {homeSubPage === 'fruits' && (
+      <>
+        {/* 搜尋水果 */}
+        <View style={styles.searchSectionCard}>
+          <Text style={styles.sectionTitleSmall}>🔍 搜尋水果</Text>
+
+          <TextInput
+            style={styles.input}
+            placeholderTextColor="#B8A89A"
+            value={fruitSearchQuery}
+            onChangeText={setFruitSearchQuery}
+          />
+
+          <Text style={styles.categoryLabel}>🍎 季節標籤</Text>
+
+          <View style={styles.tagContainer}>
+            {renderTagButtons(
+              getSortedFruitSeasons(),
+              selectedFruitSeasons,
+              (season) => {
+                setSelectedFruitSeasons(prev =>
+                  prev.includes(season)
+                    ? prev.filter(item => item !== season)
+                    : [...prev, season]
+                );
+              }
+            )}
+          </View>
+        </View>
+
+        {/* 水果庫標題 + 編輯按鈕 */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>
+            📋 水果庫
+          </Text>
+
+          {isCurrentUserAdmin && (
+            <TouchableOpacity
+              style={[
+                styles.editToggleButton,
+                isFruitEditMode && styles.editToggleButtonActive
+              ]}
+              onPress={() => {
+                if (isFruitEditMode) {
+                  setSelectedFruitIdsForHide([]);
+                }
+
+                setIsFruitEditMode(prev => !prev);
+              }}
+            >
+              <Text style={styles.editToggleButtonText}>
+                {isFruitEditMode ? '完成' : '編輯'}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* 水果編輯模式操作區 */}
+        {isFruitEditMode && isCurrentUserAdmin && (
+          <View style={styles.editToolbar}>
+            <Text style={styles.editToolbarHint}>
+              可先在上面篩選水果季節標籤。
+            </Text>
+
+            <View style={styles.editToolbarButtonGroup}>
+              <View style={styles.editToolbarRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.editMainActionButton,
+                    selectedFruitIdsForHide.length > 0
+                      ? styles.dangerActionButton
+                      : styles.disabledActionButton,
+                    { marginRight: 8 }
+                  ]}
+                  disabled={selectedFruitIdsForHide.length === 0}
+                  onPress={handleAdminHideSelectedFruits}
+                >
+                  <Text style={styles.editMainActionText}>
+                    🧹 一鍵處理 ({selectedFruitIdsForHide.length})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.clearSelectionButton}
+                  onPress={() => setSelectedFruitIdsForHide([])}
+                >
+                  <Text style={styles.clearSelectionText}>
+                    清空
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity
+                style={styles.hiddenManageButton}
+                onPress={() => setHiddenFruitsModalVisible(true)}
+              >
+                <Text style={styles.hiddenManageButtonText}>
+                  🙈 管理已隱藏水果 ({(hiddenFruitsForCurrentGroup || []).length})
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* 水果庫列表 */}
+        {(editableDisplayedFruits || []).map(fruit => {
+          const status = String(
+            fruit.publishStatus ?? (fruit.isPublic ? 'approved' : 'private')
+          ).trim().toLowerCase();
+
+          const isSelectedForHide = selectedFruitIdsForHide.includes(fruit.id);
+
+          return (
+            <TouchableOpacity
+              key={fruit.id}
+              style={[
+                styles.dishCardSelectable,
+                isFruitEditMode &&
+                  isCurrentUserAdmin &&
+                  isSelectedForHide &&
+                  styles.dishCardSelected
+              ]}
+              onPress={() => {
+                if (isFruitEditMode && isCurrentUserAdmin) {
+                  toggleFruitHideSelection(fruit.id);
+                  return;
+                }
+
+                openFruitRequestModal(fruit);
+              }}
+            >
+              <View style={styles.dishCardRow}>
+                {isFruitEditMode && isCurrentUserAdmin && (
+                  <View
+                    style={[
+                      styles.checkboxBox,
+                      isSelectedForHide && styles.checkboxBoxSelected
+                    ]}
+                  >
+                    <Text style={styles.checkboxTick}>
+                      {isSelectedForHide ? '✓' : ''}
+                    </Text>
+                  </View>
+                )}
+
+                <View style={styles.dishCardContent}>
+                  <View style={styles.dishCardHeader}>
+                    <Text style={styles.dishName}>
+                      {getFruitEmoji(fruit.name)} {fruit.name}
+                    </Text>
+
+                    <Text
+                      style={[
+                        styles.dishStatusText,
+                        status === 'approved' && styles.dishStatusApproved,
+                        status === 'pending' && styles.dishStatusPending,
+                        status === 'private' && styles.dishStatusPrivate
+                      ]}
+                    >
+                      {status === 'approved'
+                        ? '🌐 公開'
+                        : status === 'pending'
+                          ? '⏳ 待確認'
+                          : '🔒 私房'}
+                    </Text>
+                  </View>
+
+                  <Text style={styles.dishDetails}>
+                    季節: {Array.isArray(fruit.seasons) ? fruit.seasons.join(', ') : ''}
+                  </Text>
+
+                  {!isFruitEditMode && (
+                    <Text style={styles.clickHint}>
+                      👉 想食呢個
+                    </Text>
+                  )}
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </>
+    )}
   </View>
 )}
 
@@ -4760,25 +5758,8 @@ return (
           const hasEvent = hasApprovedEvent || hasCompletedEvent;
           const isPast = isPastDate(thisDateStr);
 
-          return (
-            <TouchableOpacity
-              key={`day-${day}`}
-              style={[
-                styles.calendarCell,
-                isToday && styles.calendarCellToday,
-                hasApprovedEvent && styles.calendarCellApproved,
-                hasCompletedEvent && styles.calendarCellCompleted,
-                isPast && !hasEvent && styles.calendarCellPast
-              ]}
-              onPress={() => {
-                if (isPast && !hasEvent) {
-                  showMessage('已過去的日子不能再排餐或修改。');
-                  return;
-                }
-
-                handleCellPress(day);
-              }}
-            >
+          const cellContent = (
+            <>
               <Text
                 style={[
                   styles.calendarDayNum,
@@ -4797,6 +5778,35 @@ return (
               {hasCompletedEvent && (
                 <View style={styles.calendarDotWhite} />
               )}
+            </>
+          );
+
+          if (isPast && !hasEvent) {
+            return (
+              <View
+                key={`day-${day}`}
+                style={[
+                  styles.calendarCell,
+                  styles.calendarCellPast
+                ]}
+              >
+                {cellContent}
+              </View>
+            );
+          }
+
+          return (
+            <TouchableOpacity
+              key={`day-${day}`}
+              style={[
+                styles.calendarCell,
+                isToday && styles.calendarCellToday,
+                hasApprovedEvent && styles.calendarCellApproved,
+                hasCompletedEvent && styles.calendarCellCompleted
+              ]}
+              onPress={() => handleCellPress(day)}
+            >
+              {cellContent}
             </TouchableOpacity>
           );
         })}
@@ -4807,11 +5817,46 @@ return (
       💬 排餐記錄 👇
     </Text>
 
+ <View style={styles.subTabContainer}>
+  {renderSubTabButton(
+    '全部',
+    requestTypeFilter === 'all',
+    () => setRequestTypeFilter('all')
+  )}
+
+  {renderSubTabButton(
+    '菜式',
+    requestTypeFilter === 'dish',
+    () => setRequestTypeFilter('dish')
+  )}
+
+  {renderSubTabButton(
+    '水果',
+    requestTypeFilter === 'fruit',
+    () => setRequestTypeFilter('fruit')
+  )}
+</View>
+
     {(sortedRequests || []).map(req => {
-      // 用途：判斷目前登入者是否是這張合併 request 的其中一位大廚
-      const canCurrentUserReview = Array.isArray(req.mergedCookEmails)
-        ? req.mergedCookEmails.includes(email)
-        : req.targetCookEmail === email;
+const requestIds = Array.isArray(req.mergedRequestIds)
+  ? req.mergedRequestIds
+  : [req.id];
+
+const relatedOriginalRequests = (requests || []).filter(originalReq =>
+  requestIds.includes(originalReq.id)
+);
+
+const canCurrentUserReview =
+  req.requestType === 'fruit'
+    ? relatedOriginalRequests.some(originalReq =>
+        originalReq.targetPersonEmail === email ||
+        originalReq.targetCookEmail === email
+      )
+    : (
+        Array.isArray(req.mergedCookEmails)
+          ? req.mergedCookEmails.includes(email)
+          : req.targetCookEmail === email
+      );
 
       const displaySenders = Array.isArray(req.mergedSenders)
         ? req.mergedSenders.join('、')
@@ -4821,25 +5866,28 @@ return (
         ? req.mergedCooks.join('、')
         : (req.targetCookName || req.target || '未知');
 
-      const requestIds = Array.isArray(req.mergedRequestIds)
-        ? req.mergedRequestIds
-        : [req.id];
 
       return (
         <View key={req.id} style={styles.requestCard}>
           <View style={styles.requestCardHeader}>
-            <Text style={styles.dishName}>🍽️ {req.dishName}</Text>
-
-            <Text
-              style={[
-                styles.statusBadge,
-                req.status === 'approved' && styles.statusBadgeApproved,
-                req.status === 'rejected' && styles.statusBadgeRejected,
-                req.status === 'pending' && styles.statusBadgePending
-              ]}
-            >
-              {getStatusLabel(req.status)}
+            <Text style={styles.dishName}>
+              {req.requestType === 'fruit'
+                ? `${getFruitEmoji(req.fruitName || req.dishName)} ${req.fruitName || req.dishName}`
+                : `🍽️ ${req.dishName}`}
             </Text>
+
+<Text
+  style={[
+    styles.statusBadge,
+    req.status === 'approved' && styles.statusBadgeApproved,
+    req.status === 'rejected' && styles.statusBadgeRejected,
+    req.status === 'pending' && styles.statusBadgePending
+  ]}
+>
+  {req.requestType === 'fruit' && req.status === 'approved'
+    ? '✅ 已安排'
+    : getStatusLabel(req.status)}
+</Text>
           </View>
 
           <Text style={styles.requestMetaText}>
@@ -4849,133 +5897,203 @@ return (
             </Text>
           </Text>
 
-          <Text style={styles.requestMetaText}>
-            日期餐次：
-            <Text style={styles.timeHighlight}>
-              {req.date} ({req.meal})
+          {req.requestType !== 'fruit' && (
+            <Text style={styles.requestMetaText}>
+              日期餐次：
+              <Text style={styles.timeHighlight}>
+                {req.date} ({req.meal})
+              </Text>
             </Text>
-          </Text>
+          )}
 
           <Text style={styles.requestMetaTextBottom}>
-            掌廚大廚：👨‍🍳{' '}
+            {req.requestType === 'fruit' ? '通知對象：👤 ' : '掌廚大廚：👨‍🍳 '}
             <Text style={styles.requestMetaStrong}>
               {displayCooks}
             </Text>
           </Text>
 
-          {(req.status === 'pending' || req.status === 'approved') && canCurrentUserReview && (
-            <View style={styles.actionRow}>
-              {req.status === 'pending' && (
-                <TouchableOpacity
-                  style={[styles.actionBtn, styles.successActionButton]}
-                  onPress={() => handleApproveRequest(requestIds)}
-                >
-                  <Text style={styles.actionBtnText}>👍 同意</Text>
-                </TouchableOpacity>
-              )}
+{(
+  // 菜式：pending / approved 都可以在排餐記錄操作
+  req.requestType !== 'fruit' &&
+  (req.status === 'pending' || req.status === 'approved') &&
+  canCurrentUserReview
+) || (
+  // 水果：只有 approved 後，通知對象才可以在排餐記錄取消 / 已完成
+  req.requestType === 'fruit' &&
+  req.status === 'approved' &&
+  canCurrentUserReview
+) ? (
+  <View style={styles.actionRow}>
+    {/* 菜式 pending：同意 */}
+    {req.requestType !== 'fruit' && req.status === 'pending' && (
+      <TouchableOpacity
+        style={[styles.actionBtn, styles.successActionButton]}
+        onPress={() => handleApproveRequest(requestIds)}
+      >
+        <Text style={styles.actionBtnText}>👍 同意</Text>
+      </TouchableOpacity>
+    )}
 
-              <TouchableOpacity
-                style={[styles.actionBtn, styles.infoActionButton]}
-                disabled={rescheduleModalVisible}
-                onPress={() => openRescheduleModal(req)}
-              >
-                <Text style={styles.actionBtnText}>📅 改期</Text>
-              </TouchableOpacity>
+    {/* 菜式 pending / approved：改期 */}
+    {req.requestType !== 'fruit' && (
+      <TouchableOpacity
+        style={[styles.actionBtn, styles.infoActionButton]}
+        disabled={rescheduleModalVisible}
+        onPress={() => openRescheduleModal(req)}
+      >
+        <Text style={styles.actionBtnText}>📅 改期</Text>
+      </TouchableOpacity>
+    )}
 
-              <TouchableOpacity
-                style={[styles.actionBtn, styles.dangerActionButton]}
-                onPress={() => openRejectModal(req)}
-              >
-                <Text style={styles.actionBtnText}>
-                  {req.status === 'approved' ? '👎取消 ' : '👎 拒絕'}
-                </Text>
-              </TouchableOpacity>
+    {/* 菜式 pending = 拒絕；菜式 approved = 取消；水果 approved = 取消 */}
+    <TouchableOpacity
+      style={[styles.actionBtn, styles.dangerActionButton]}
+      onPress={() => openRejectModal(req)}
+    >
+      <Text style={styles.actionBtnText}>
+        {req.requestType === 'fruit'
+          ? '👎 取消'
+          : req.status === 'approved'
+            ? '👎 取消'
+            : '👎 拒絕'}
+      </Text>
+    </TouchableOpacity>
 
-              {req.status === 'approved' && (
-                <TouchableOpacity
-                  style={[styles.actionBtn, styles.neutralActionButton]}
-                  onPress={() => handleCompleteRequest(requestIds)}
-                >
-                  <Text style={styles.actionBtnText}>✅ 已完成</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
-         
+    {/* approved 後可以已完成：菜式 / 水果都可以 */}
+    {req.status === 'approved' && (
+      <TouchableOpacity
+        style={[styles.actionBtn, styles.neutralActionButton]}
+        onPress={() => handleCompleteRequest(requestIds)}
+      >
+        <Text style={styles.actionBtnText}>✅ 已完成</Text>
+      </TouchableOpacity>
+    )}
+  </View>
+) : null}
         </View>
       );
     })}
   </View>
 )}
 
-
-{/* ================= 分頁 3: 加新菜式 ================= */}
+{/* ================= 分頁 3: 加新菜式 / 加水果 ================= */}
 {currentTab === 'add' && (
   <View style={styles.pageContent}>
+ <View style={styles.subTabContainer}>
+  {renderSubTabButton(
+    '加菜式',
+    homeSubPage !== 'fruits',
+    () => setHomeSubPage('dishes')
+  )}
+
+  {renderSubTabButton(
+    '加水果',
+    homeSubPage === 'fruits',
+    () => setHomeSubPage('fruits')
+  )}
+</View>
+
     <View style={styles.formCard}>
-      <Text style={styles.sectionTitleLarge}>➕ 新增私房食譜</Text>
+      {homeSubPage !== 'fruits' ? (
+        <>
+          <Text style={styles.sectionTitleLarge}>➕ 新增私房食譜</Text>
 
-      <Text style={styles.label}>1. 菜式名稱 *</Text>
-      <TextInput
-        style={styles.input}
-        value={newDishName}
-        onChangeText={setNewDishName}
-        placeholderTextColor="#B8A89A"
-      />
+          <Text style={styles.label}>1. 菜式名稱 *</Text>
+          <TextInput
+            style={styles.input}
+            value={newDishName}
+            onChangeText={setNewDishName}
+            placeholderTextColor="#B8A89A"
+          />
 
-      {recommendedDishes.length > 0 && (
-        <View style={styles.recommendBox}>
-          <Text style={styles.recommendWarningText}>
-            ⚠️ 提示：已有相似菜色：
-          </Text>
+          {recommendedDishes.length > 0 && (
+            <View style={styles.recommendBox}>
+              <Text style={styles.recommendWarningText}>
+                ⚠️ 提示：已有相似菜色：
+              </Text>
 
-          {recommendedDishes.map(r => (
-            <Text key={r.id} style={styles.recommendItemText}>
-              • {r.name}
-            </Text>
-          ))}
-        </View>
-      )}
+              {recommendedDishes.map(r => (
+                <Text key={r.id} style={styles.recommendItemText}>
+                  • {r.name}
+                </Text>
+              ))}
+            </View>
+          )}
 
-      <Text style={styles.label}>2. 食材</Text>
-      <TextInput
-        style={styles.input}
-        value={newDishIngredients}
-        onChangeText={setNewDishIngredients}
-        placeholderTextColor="#B8A89A"
-      />
+          <Text style={styles.label}>2. 食材</Text>
+          <TextInput
+            style={styles.input}
+            value={newDishIngredients}
+            onChangeText={setNewDishIngredients}
+            placeholderTextColor="#B8A89A"
+          />
 
-      <View style={styles.formSectionHeaderRow}>
-        <Text style={styles.label}>3. 分類標籤 </Text>
+          <View style={styles.formSectionHeaderRow}>
+            <Text style={styles.label}>3. 分類標籤 </Text>
 
-        <TouchableOpacity
-          style={styles.inlineManageButton}
-          onPress={() => setCustomModalVisible(true)}
-        >
-          <Text style={styles.inlineManageButtonText}>
-            ⚙️ 管理標籤
-          </Text>
-        </TouchableOpacity>
-      </View>
+            <TouchableOpacity
+              style={styles.inlineManageButton}
+              onPress={() => setCustomModalVisible(true)}
+            >
+              <Text style={styles.inlineManageButtonText}>
+                ⚙️ 管理標籤
+              </Text>
+            </TouchableOpacity>
+          </View>
 
-      {getSortedCategoryKeys().map(key => {
-        const cat = dynamicCategories[key];
+          {getSortedCategoryKeys().map(key => {
+            const cat = dynamicCategories[key];
 
-        return (
-          <View key={`add-${key}`} style={styles.addCategoryBlock}>
-            <Text style={styles.miniCategoryLabel}>
-              {cat.title}
-            </Text>
+            return (
+              <View key={`add-${key}`} style={styles.addCategoryBlock}>
+                <Text style={styles.miniCategoryLabel}>
+                  {cat.title}
+                </Text>
 
-            {cat.isNested ? (
-              getSortedSubCategoryKeys(key).map(subKey => (
-                <View key={subKey} style={styles.addSubCategoryBlock}>
-                  <Text style={styles.miniCategoryLabel}>
-                    └ {cat.subCategories[subKey].title}
-                  </Text>
+                {cat.isNested ? (
+                  getSortedSubCategoryKeys(key).map(subKey => (
+                    <View key={subKey} style={styles.addSubCategoryBlock}>
+                      <Text style={styles.miniCategoryLabel}>
+                        └ {cat.subCategories[subKey].title}
+                      </Text>
 
+                      <View style={styles.tagContainer}>
+                        {getSortedTags(cat.subCategories[subKey].tags, key, subKey).map(t => {
+                          const isSelected = addPageSelectedTags.includes(t);
+
+                          return (
+                            <TouchableOpacity
+                              key={t}
+                              style={[
+                                styles.miniSelectBtn,
+                                isSelected && styles.miniSelectBtnActive
+                              ]}
+                              onPress={() => {
+                                setAddPageSelectedTags(prev =>
+                                  prev.includes(t)
+                                    ? prev.filter(x => x !== t)
+                                    : [...prev, t]
+                                );
+                              }}
+                            >
+                              <Text
+                                style={[
+                                  styles.miniSelectBtnText,
+                                  isSelected && styles.miniSelectBtnTextActive
+                                ]}
+                              >
+                                {t}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  ))
+                ) : (
                   <View style={styles.tagContainer}>
-                    {getSortedTags(cat.subCategories[subKey].tags, key, subKey).map(t => {
+                    {getSortedTags(cat.tags, key).map(t => {
                       const isSelected = addPageSelectedTags.includes(t);
 
                       return (
@@ -5005,81 +6123,132 @@ return (
                       );
                     })}
                   </View>
-                </View>
-              ))
-            ) : (
-              <View style={styles.tagContainer}>
-                {getSortedTags(cat.tags, key).map(t => {
-                  const isSelected = addPageSelectedTags.includes(t);
-
-                  return (
-                    <TouchableOpacity
-                      key={t}
-                      style={[
-                        styles.miniSelectBtn,
-                        isSelected && styles.miniSelectBtnActive
-                      ]}
-                      onPress={() => {
-                        setAddPageSelectedTags(prev =>
-                          prev.includes(t)
-                            ? prev.filter(x => x !== t)
-                            : [...prev, t]
-                        );
-                      }}
-                    >
-                      <Text
-                        style={[
-                          styles.miniSelectBtnText,
-                          isSelected && styles.miniSelectBtnTextActive
-                        ]}
-                      >
-                        {t}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+                )}
               </View>
-            )}
+            );
+          })}
+
+          <Text style={styles.label}>4. 發佈權限</Text>
+
+          <View style={styles.permissionRow}>
+            <TouchableOpacity
+              style={[
+                styles.permBtn,
+                !isPublic && styles.permBtnActive
+              ]}
+              onPress={() => setIsPublic(false)}
+            >
+              <Text style={styles.permBtnText}>
+                🔒 {familyGroupName}私有
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.permBtn,
+                isPublic && styles.permBtnActive
+              ]}
+              onPress={() => setIsPublic(true)}
+            >
+              <Text style={styles.permBtnText}>
+                🌐 公開分享
+              </Text>
+            </TouchableOpacity>
           </View>
-        );
-      })}
 
-      <Text style={styles.label}>4. 發佈權限</Text>
+          <TouchableOpacity
+            style={styles.submitDishBtn}
+            onPress={handleAddDish}
+          >
+            <Text style={styles.submitDishBtnText}>
+              💾 儲存食譜
+            </Text>
+          </TouchableOpacity>
+        </>
+      ) : (
+        <>
+          <Text style={styles.sectionTitleLarge}>➕ 新增水果</Text>
 
-      <View style={styles.permissionRow}>
-        <TouchableOpacity
-          style={[
-            styles.permBtn,
-            !isPublic && styles.permBtnActive
-          ]}
-          onPress={() => setIsPublic(false)}
-        >
-          <Text style={styles.permBtnText}>
-            🔒   {familyGroupName}私有
-          </Text>
-        </TouchableOpacity>
+          <Text style={styles.label}>1. 水果名稱 *</Text>
+          <TextInput
+            style={styles.input}
+            value={newFruitName}
+            onChangeText={setNewFruitName}
+            placeholderTextColor="#B8A89A"
+          />
 
-        <TouchableOpacity
-          style={[
-            styles.permBtn,
-            isPublic && styles.permBtnActive
-          ]}
-          onPress={() => setIsPublic(true)}
-        >
-          <Text style={styles.permBtnText}>
-            🌐 公開分享
-          </Text>
-        </TouchableOpacity>
-      </View>
+          <Text style={styles.label}>2. 季節標籤</Text>
 
-      <TouchableOpacity
-        style={styles.submitDishBtn}
-        onPress={handleAddDish}
-      >
-        <Text style={styles.submitDishBtnText}>
-          💾 儲存食譜
-        </Text>
-      </TouchableOpacity>
+          <View style={styles.tagContainer}>
+            {getSortedFruitSeasons().map(season => {
+              const isSelected = newFruitSeasons.includes(season);
+
+              return (
+                <TouchableOpacity
+                  key={season}
+                  style={[
+                    styles.miniSelectBtn,
+                    isSelected && styles.miniSelectBtnActive
+                  ]}
+                  onPress={() => {
+                    setNewFruitSeasons(prev =>
+                      prev.includes(season)
+                        ? prev.filter(x => x !== season)
+                        : [...prev, season]
+                    );
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.miniSelectBtnText,
+                      isSelected && styles.miniSelectBtnTextActive
+                    ]}
+                  >
+                    {season}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <Text style={styles.label}>3. 發佈權限</Text>
+
+          <View style={styles.permissionRow}>
+            <TouchableOpacity
+              style={[
+                styles.permBtn,
+                !newFruitIsPublic && styles.permBtnActive
+              ]}
+              onPress={() => setNewFruitIsPublic(false)}
+            >
+              <Text style={styles.permBtnText}>
+                🔒 {familyGroupName}私有
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.permBtn,
+                newFruitIsPublic && styles.permBtnActive
+              ]}
+              onPress={() => setNewFruitIsPublic(true)}
+            >
+              <Text style={styles.permBtnText}>
+                🌐 公開分享
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
+            style={styles.submitDishBtn}
+            onPress={handleAddFruit}
+          >
+            <Text style={styles.submitDishBtnText}>
+              💾 儲存水果
+            </Text>
+          </TouchableOpacity>
+        </>
+      )}
     </View>
   </View>
 )}
@@ -5525,7 +6694,7 @@ return (
                   onPress={() => handleAdminRestoreHiddenDish(dish)}
                 >
                   <Text style={styles.restoreDishButtonText}>
-                    ↩️ 還原到家庭菜餚庫
+                    ↩️ 還原到菜式庫
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -5544,7 +6713,80 @@ return (
     </View>
   </View>
 </Modal>
+{/* 已隱藏水果管理 Modal */}
+<Modal
+  animationType="slide"
+  transparent={true}
+  visible={hiddenFruitsModalVisible}
+  onRequestClose={() => setHiddenFruitsModalVisible(false)}
+>
+  <View style={styles.modalCentered}>
+    <View style={styles.hiddenDishesModalView}>
+      <Text style={styles.modalTitle}>
+        🙈 已隱藏水果 ({(hiddenFruitsForCurrentGroup || []).length})
+      </Text>
 
+      {(hiddenFruitsForCurrentGroup || []).length === 0 ? (
+        <Text style={styles.emptyModalText}>
+          目前沒有被此群組隱藏的水果。
+        </Text>
+      ) : (
+        <ScrollView
+          style={styles.hiddenDishesScroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          {(hiddenFruitsForCurrentGroup || []).map(fruit => {
+            const status = String(
+              fruit.publishStatus ?? (fruit.isPublic ? 'approved' : 'private')
+            ).trim().toLowerCase();
+
+            return (
+              <View
+                key={fruit.id}
+                style={styles.hiddenDishCard}
+              >
+                <View style={styles.dishCardHeader}>
+                  <Text style={styles.dishName}>🍎 {fruit.name}</Text>
+
+                  <Text
+                    style={[
+                      styles.dishStatusText,
+                      status === 'approved' && styles.dishStatusApproved,
+                      status !== 'approved' && styles.dishStatusPrivate
+                    ]}
+                  >
+                    {status === 'approved' ? '🌐 公開' : '🔒 私房'}
+                  </Text>
+                </View>
+
+                <Text style={styles.dishDetails}>
+                  季節: {Array.isArray(fruit.seasons) ? fruit.seasons.join(', ') : ''}
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.restoreDishButton}
+                  onPress={() => handleAdminRestoreHiddenFruit(fruit)}
+                >
+                  <Text style={styles.restoreDishButtonText}>
+                    ↩️ 還原到水果庫
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            );
+          })}
+        </ScrollView>
+      )}
+
+      <View style={styles.modalFooterButtonArea}>
+        <Button
+          title="關閉"
+          color="gray"
+          onPress={() => setHiddenFruitsModalVisible(false)}
+        />
+      </View>
+    </View>
+  </View>
+</Modal>
 {/* ================= 全新：支援細分類選取的底部彈出半分頁 ================= */}
 <Modal
   visible={customModalVisible}
@@ -6152,7 +7394,11 @@ contentContainerStyle={{
               key={req.id}
               style={styles.requestInboxCard}
             >
-              <Text style={styles.dishName}>🍲 {req.dishName}</Text>
+             <Text style={styles.dishName}>
+  {req.requestType === 'fruit'
+    ? `🍎 ${req.fruitName || req.dishName}`
+    : `🍲 ${req.dishName}`}
+</Text>
 
               <Text style={styles.dishDetails}>
                 來自：{req.senderNickname || '未知用戶'}
@@ -6163,38 +7409,44 @@ contentContainerStyle={{
               </Text>
 
               <Text style={styles.dishDetails}>
-                材料：{req.ingredients || '未填寫'}
+                {req.requestType !== 'fruit' && (
+  <Text style={styles.dishDetails}>
+    材料：{req.ingredients || '未填寫'}
+  </Text>
+)}
               </Text>
 
               <View style={styles.requestInboxActionArea}>
-                {req.status === 'pending' && (
-                  <TouchableOpacity
-                    style={[styles.requestInboxActionButton, styles.successActionButton]}
-                    onPress={() => handleApproveRequest(req.mergedRequestIds || [req.id])}
-                  >
-                    <Text style={styles.requestInboxActionText}>
-                      ✅ 同意
-                    </Text>
-                  </TouchableOpacity>
-                )}
+ {req.status === 'pending' && (
+  <TouchableOpacity
+    style={[styles.requestInboxActionButton, styles.successActionButton]}
+    onPress={() => handleApproveRequest(req.mergedRequestIds || [req.id])}
+  >
+    <Text style={styles.requestInboxActionText}>
+      ✅ 同意
+    </Text>
+  </TouchableOpacity>
+)}
 
-                <TouchableOpacity
-                  style={[styles.requestInboxActionButton, styles.infoActionButton]}
-                  onPress={() => openRescheduleModal(req)}
-                >
-                  <Text style={styles.requestInboxActionText}>
-                    📅 改期並同意
-                  </Text>
-                </TouchableOpacity>
+{req.requestType !== 'fruit' && (
+  <TouchableOpacity
+    style={[styles.requestInboxActionButton, styles.infoActionButton]}
+    onPress={() => openRescheduleModal(req)}
+  >
+    <Text style={styles.requestInboxActionText}>
+      📅 改期並同意
+    </Text>
+  </TouchableOpacity>
+)}
 
-                <TouchableOpacity
-                  style={[styles.requestInboxActionButton, styles.dangerActionButton]}
-                  onPress={() => openRejectModal(req)}
-                >
-                  <Text style={styles.requestInboxActionText}>
-                    {req.status === 'approved' ? '取消 / 拒絕' : '❌ 拒絕'}
-                  </Text>
-                </TouchableOpacity>
+<TouchableOpacity
+  style={[styles.requestInboxActionButton, styles.dangerActionButton]}
+  onPress={() => openRejectModal(req)}
+>
+  <Text style={styles.requestInboxActionText}>
+    {req.requestType === 'fruit' ? '❌ 取消' : '❌ 拒絕'}
+  </Text>
+</TouchableOpacity>
 
                 {/* 大廚同意時，是否把材料加入購物清單 */}
                 <TouchableOpacity
@@ -6229,6 +7481,96 @@ contentContainerStyle={{
     </View>
   </View>
 </Modal>
+
+{/* 水果想食 Modal */}
+<Modal
+  animationType="slide"
+  transparent={true}
+  visible={fruitRequestModalVisible}
+  onRequestClose={() => setFruitRequestModalVisible(false)}
+>
+  <View style={styles.modalCentered}>
+    <View style={styles.modalView}>
+      <Text style={styles.modalTitle}>🍎 提出想食水果</Text>
+
+      {selectedFruit && (
+        <View style={styles.modalContentFull}>
+          <Text style={styles.label}>
+            水果名稱：
+            <Text style={styles.modalStrongText}>
+              {selectedFruit.name}
+            </Text>
+          </Text>
+
+          <Text style={styles.label}>通知對象：</Text>
+          <TouchableOpacity
+            style={styles.dropdownHeader}
+            onPress={() => setFruitTargetDropdownOpen(!fruitTargetDropdownOpen)}
+          >
+            <Text style={styles.dropdownHeaderText}>
+              {fruitTargetName ? `👤 ${fruitTargetName}` : '請選擇通知對象'} ▼
+            </Text>
+          </TouchableOpacity>
+
+          {fruitTargetDropdownOpen && (
+            <View style={styles.dropdownList}>
+              {cookOptions.map(member => (
+                <TouchableOpacity
+                  key={member.email || member.id}
+                  style={styles.dropdownItem}
+                  onPress={() => {
+                    setFruitTargetName(member.name || '');
+                    setFruitTargetEmail(member.email || '');
+                    setFruitTargetDropdownOpen(false);
+                  }}
+                >
+                  <Text style={styles.dropdownItemText}>
+                    {member.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+
+          <TouchableOpacity
+            style={styles.checkboxRow}
+            onPress={() => {
+              const nextValue = fruitAutoAddToList === true ? false : true;
+              setFruitAutoAddToList(nextValue);
+              setLastAutoAddToList(nextValue);
+            }}
+          >
+            <Text style={styles.checkboxIcon}>
+              {fruitAutoAddToList === true ? '✅' : '⬜'}
+            </Text>
+
+            <Text style={styles.checkboxLabel}>
+              將此水果加入「購物清單」
+            </Text>
+          </TouchableOpacity>
+
+          <View style={styles.modalButtonRow}>
+            <TouchableOpacity
+              style={[styles.modalBtn, styles.modalCancelButton]}
+              onPress={() => setFruitRequestModalVisible(false)}
+            >
+              <Text style={styles.modalBtnText}>取消</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.modalBtn, styles.modalPrimaryButton]}
+              onPress={sendFruitRequest}
+            >
+              <Text style={styles.modalBtnText}>🚀 送出</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+    </View>
+  </View>
+</Modal>
+
 
 {/* 大廚通知 Modal：發起人收到改期 / 拒絕 / 取消通知時彈出 */}
 <Modal
@@ -6287,6 +7629,22 @@ contentContainerStyle={{
           onPress={dismissAllCookMessages}
         />
       </View>
+
+      {rejectTargetRequest?.requestType === 'fruit' && (
+  <View style={styles.tagContainer}>
+    {FRUIT_REJECT_REASONS.map(reason => (
+      <TouchableOpacity
+        key={reason}
+        style={styles.miniSelectBtn}
+        onPress={() => setRejectReasonInput(reason)}
+      >
+        <Text style={styles.miniSelectBtnText}>
+          {reason}
+        </Text>
+      </TouchableOpacity>
+    ))}
+  </View>
+)}
     </View>
   </View>
 </Modal>
@@ -6434,10 +7792,29 @@ contentContainerStyle={{
         placeholder="例如：當日沒有時間煮 / 材料不足"
         placeholderTextColor="#B8A89A"
       />
-
-      <Text style={styles.modalHintText}>
-        如果不填，系統會自動傳送 official 通知。
-      </Text>
+{isRejectTargetFruit() && (
+  <View style={styles.tagContainer}>
+    {FRUIT_REJECT_REASONS.map(reason => (
+      <TouchableOpacity
+        key={reason}
+        style={[
+          styles.miniSelectBtn,
+          rejectReasonInput === reason && styles.miniSelectBtnActive
+        ]}
+        onPress={() => setRejectReasonInput(reason)}
+      >
+        <Text
+          style={[
+            styles.miniSelectBtnText,
+            rejectReasonInput === reason && styles.miniSelectBtnTextActive
+          ]}
+        >
+          {reason}
+        </Text>
+      </TouchableOpacity>
+    ))}
+  </View>
+)}
 
       <View style={styles.modalButtonRow}>
         <Button
@@ -6532,6 +7909,8 @@ contentContainerStyle={{
       setRequestModalVisible(false);
       setRescheduleModalVisible(false);
       setCurrentTab('home');
+      setFruitRequestModalVisible(false);
+setHiddenFruitsModalVisible(false);
     }}
   >
     <Text style={styles.tabIcon}>🏠</Text>
@@ -6541,7 +7920,7 @@ contentContainerStyle={{
         currentTab === 'home' && styles.tabTextActive
       ]}
     >
-      家庭菜庫
+      點菜區
     </Text>
   </TouchableOpacity>
 
@@ -6564,7 +7943,7 @@ contentContainerStyle={{
         currentTab === 'group' && styles.tabTextActive
       ]}
     >
-      排餐審核
+      排餐記錄
     </Text>
   </TouchableOpacity>
 
@@ -7002,7 +8381,7 @@ switchToLoginText: {
   // 抽籤按鈕
   // =====================
   luckyDrawButton: {
-    backgroundColor: '#B45ACB',
+    backgroundColor: '#d18de3',
     paddingVertical: 15,
     paddingHorizontal: 16,
     borderRadius: 18,
@@ -8772,5 +10151,43 @@ scrollTopText: {
   color: '#fff',
   fontSize: 18,
   fontWeight: 'bold'
+},
+subTabContainer: {
+  flexDirection: 'row',
+  backgroundColor: '#FFF3E8',
+  borderRadius: 999,
+  padding: 4,
+  marginBottom: 14,
+  borderWidth: 1,
+  borderColor: '#F3D2B8',
+},
+
+subTabButton: {
+  flex: 1,
+  paddingVertical: 8,
+  paddingHorizontal: 10,
+  borderRadius: 999,
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+
+subTabButtonActive: {
+  backgroundColor: '#FFFFFF',
+  shadowColor: '#000',
+  shadowOpacity: 0.06,
+  shadowRadius: 4,
+  shadowOffset: { width: 0, height: 2 },
+  elevation: 2,
+},
+
+subTabButtonText: {
+  fontSize: 14,
+  fontWeight: '600',
+  color: '#A66A3F',
+},
+
+subTabButtonTextActive: {
+  color: '#E86A1C',
+  fontWeight: '800',
 }
 });
