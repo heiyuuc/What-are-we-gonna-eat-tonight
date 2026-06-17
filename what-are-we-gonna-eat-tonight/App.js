@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { StatusBar, StyleSheet, Text, View, ScrollView, TouchableOpacity, TextInput, Modal, Button, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import { db, registerWithEmail, loginWithEmail, setAuthToken, clearAuthToken, deleteCurrentAccount, reauthenticateCurrentUser} from './firebase';
@@ -7,17 +7,27 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Calendar } from 'react-native-calendars';
 import * as Updates from 'expo-updates';
 function AppContent() {
+  const scrollViewRef = useRef(null);
 
 
 //即時update
 useEffect(() => {
-  (async () => {
-    const update = await Updates.checkForUpdateAsync();
-    if (update.isAvailable) {
-      await Updates.fetchUpdateAsync();
-      await Updates.reloadAsync();
+  const checkForUpdates = async () => {
+    try {
+      if (__DEV__) return;
+
+      const update = await Updates.checkForUpdateAsync();
+
+      if (update.isAvailable) {
+        await Updates.fetchUpdateAsync();
+        await Updates.reloadAsync();
+      }
+    } catch (error) {
+      console.log('checkForUpdates error:', error);
     }
-  })();
+  };
+
+  checkForUpdates();
 }, []);
 
   const insets = useSafeAreaInsets();
@@ -112,27 +122,36 @@ const loadUserProfileAfterAuth = async (loginEmail) => {
     let finalGroupRole = 'member';
     let finalAdminEmails = [];
 
-    if (me.groupInviteCode) {
-      const groups = await db.collection('familyGroups').getAll();
-      const currentGroup = groups.find(g => g.inviteCode === me.groupInviteCode);
+let hasValidGroup = false;
 
-      if (currentGroup) {
-        finalAdminEmails = Array.isArray(currentGroup.adminEmails)
-          ? currentGroup.adminEmails
-          : [];
+if (me.groupInviteCode) {
+  const groups = await db.collection('familyGroups').getAll();
+  const safeGroups = Array.isArray(groups) ? groups : [];
 
-        finalGroupRole = finalAdminEmails.includes(loginEmail) ? 'admin' : 'member';
-      }
-    }
+  const currentGroup = safeGroups.find(g => g.inviteCode === me.groupInviteCode);
 
-    setGroupRole(finalGroupRole);
-    setGroupAdminEmails(finalAdminEmails);
+  if (currentGroup) {
+    hasValidGroup = true;
 
-    if (me.groupInviteCode) {
-      setAppStage('main');
-    } else {
-      setAppStage('group_setup');
-    }
+    finalAdminEmails = Array.isArray(currentGroup.adminEmails)
+      ? currentGroup.adminEmails
+      : [];
+
+    finalGroupRole = finalAdminEmails.includes(loginEmail) ? 'admin' : 'member';
+  } else {
+    setFamilyGroupName('');
+    setGroupInviteCode('');
+  }
+}
+
+setGroupRole(finalGroupRole);
+setGroupAdminEmails(finalAdminEmails);
+
+if (hasValidGroup) {
+  setAppStage('main');
+} else {
+  setAppStage('group_setup');
+}
   } else {
     setGroupRole('member');
     setGroupAdminEmails([]);
@@ -188,16 +207,33 @@ const handleLogin = async () => {
       return showMessage('請輸入電郵和密碼。');
     }
 
-    const user = await loginWithEmail(email, password);
+   const handleLogin = async () => {
+  try {
+    const loginEmail = email.trim().toLowerCase();
+    const loginPassword = password;
 
-    // 存 token 給 Firestore 用
+    if (!loginEmail || !loginPassword) {
+      return showMessage('請輸入電郵和密碼。');
+    }
+
+    const user = await loginWithEmail(loginEmail, loginPassword);
+
+    if (!user?.idToken || !user?.localId) {
+      return showMessage('登入失敗', '無法取得登入資料，請再試一次。');
+    }
+
     setAuthToken(user.idToken);
 
-    // 存登入紀錄到手機，之後開 App 可以自動登入
-    await saveLoginSessionToDevice(user, email);
+    await saveLoginSessionToDevice(user, loginEmail);
 
-    // 登入後，從 Firebase users collection 找回自己資料
-    await loadUserProfileAfterAuth(email);
+    await loadUserProfileAfterAuth(loginEmail);
+
+    console.log('成功登入:', user.localId);
+  } catch (err) {
+    console.log('handleLogin error:', err);
+    showMessage('登入失敗', err.message || String(err));
+  }
+};
 
     console.log("成功登入:", user);
   } catch (err) {
@@ -316,46 +352,58 @@ const handleCreateFamilyGroup = async () => {
 
     const newCode = await generateUniqueInviteCode();
 
+const defaultTagCategories =
+  typeof INITIAL_TAG_CATEGORIES !== 'undefined' &&
+  INITIAL_TAG_CATEGORIES &&
+  typeof INITIAL_TAG_CATEGORIES === 'object' &&
+  !Array.isArray(INITIAL_TAG_CATEGORIES)
+    ? INITIAL_TAG_CATEGORIES
+    : {};
+
+
     const groupData = {
-  groupName: groupName,
-  inviteCode: newCode,
-  createdByEmail: email,
-  createdByNickname: nickname,
+      groupName: groupName,
+      inviteCode: newCode,
+      createdByEmail: email,
+      createdByNickname: nickname,
 
-  // 群組權限資料
-  ownerEmail: email,
-  adminEmails: [email],
+      // 群組權限資料
+      ownerEmail: email,
+      adminEmails: [email],
 
-  // 群組成員資料
-  memberNames: [nickname],
-  memberEmails: [email],
+      // 群組成員資料
+      memberNames: [nickname],
+      memberEmails: [email],
 
-  // 用途：群組共用分類 / 標籤設定
-  tagCategories: INITIAL_TAG_CATEGORIES,
+      // 用途：群組共用分類 / 標籤設定
+      tagCategories: defaultTagCategories,
 
-  createdAt: new Date()
-};
+      createdAt: new Date()
+    };
 
     // 1. 新增群組到 Firebase
     await db.collection('familyGroups').add(groupData);
 
     // 2. 更新自己 users profile
-    const users = await db.collection('users').getAll();
-    const me = users.find(u => u.email === email);
+ const users = await db.collection('users').getAll();
+const safeUsers = Array.isArray(users) ? users : [];
+const me = safeUsers.find(u => u.email === email);
 
-    if (me) {
-      await db.collection('users').update(me.id, {
-        uid: me.uid || '',
-        email: email,
-        nickname: nickname,
-        userRole: userRole || 'eat',
-        familyGroupName: groupName,
-        groupInviteCode: newCode,
-        groupRole: 'admin',
-        accountStatus: me.accountStatus || 'active',
-        createdAt: me.createdAt || new Date()
-      });
-    }
+if (!me?.id) {
+  return showMessage('建立群組失敗', '找不到你的用戶資料，請重新登入後再試。');
+}
+
+await db.collection('users').update(me.id, {
+  uid: me.uid || '',
+  email: email,
+  nickname: nickname,
+  userRole: userRole || 'eat',
+  familyGroupName: groupName,
+  groupInviteCode: newCode,
+  groupRole: 'admin',
+  accountStatus: me.accountStatus || 'active',
+  createdAt: me.createdAt || new Date()
+});
 
     // 3. 更新本機畫面 state
 setFamilyGroupName(groupName);
@@ -455,8 +503,11 @@ setGroupAdminEmails(currentAdminEmails);
 
 // 用途：登入、加入群組、切換群組、改暱稱或角色後，自動重新載入 Firebase 成員名單
 useEffect(() => {
+  if (appStage !== 'main') return;
+  if (!email || !groupInviteCode) return;
+
   loadGroupMembersFromFirebase();
-}, [groupInviteCode, email, nickname, userRole]);
+}, [appStage, groupInviteCode, email, nickname, userRole]);
 
 // 用途：admin 可以指定或取消其他人成為 admin
 // 注意：ownerEmail 只作紀錄，不再自動等於 admin
@@ -1470,7 +1521,7 @@ const INITIAL_TAG_CATEGORIES = {
       staple: { title: '🍚 主食與麵點', tags: ['🍚 白飯', '🍜 麵條', '🥟 水餃', '🍞 麵包', '🍞 吐司'] }
     }
   },
-  cuisine: { title: '🌐 菜式地區', tags: ['🇨🇳 中式', '🇭🇰 港式', '🇯🇵 日式', '🇰🇷 韓式', '🇹🇭 泰式', '🇮🇹 西式','🇹🇼 台式',] },
+  cuisine: { title: '🌐 菜式地區', tags: ['🇨🇳 中式', '🇭🇰 港式', '🇯🇵 日式', '🇰🇷 韓式', '🇹🇭 泰式', '🇮🇹 西式','🇹🇼 台式'] },
   method: { title: '🍳 烹調方式', tags: ['🔥 煎炒', '💨 蒸煮', '♨️ 蒸餸', '🥘 燜燉', '🍗 酥炸', '🥗 涼拌', '🔥 烘烤', '💨 氣炸', '🍲 火鍋', '🍲 湯底', '🔥 鑊氣', '🍲 煲仔飯'] },
   flavour: { title: '😋 味道', tags: ['🍯 酸甜', '🍬 甜', '🍛 咖喱', '🌶️ 辣味', '🧂 清淡'] },
   lifestyle: { title: '🍽️ 菜式類型', tags: ['🍰 甜品', '🥟 點心', '⏱️ 快手菜', '🏠 家常菜', '🥤 茶餐廳', '🍢 大牌檔', '🧓 老火湯', '🥗 低卡減脂', '🌱 純素', '🌱 蔬食'] }
@@ -1488,6 +1539,10 @@ const formatDateToString = (date) => {
   return `${y}-${m}-${d}`;
 };
 const normalizeDateString = (dateStr) => {
+  if (!dateStr || typeof dateStr !== 'string') {
+    return '';
+  }
+
   const parts = dateStr.split('-');
   if (parts.length !== 3) return dateStr;
 
@@ -1538,7 +1593,7 @@ const showConfirmMessage = (title, message, buttons = []) => {
 
   // 控制首頁大分類標籤摺疊狀態
   const [expandedCategories, setExpandedCategories] = useState({
-    ingredients: false, cuisine: false, method: false, lifestyle: false,
+    ingredients: false, cuisine: false, method: false, flavour: false, lifestyle: false,
   });
 
 
@@ -1938,8 +1993,9 @@ const sortedRequests = [...(uniqueRequests || [])]
 const approvedDates = Array.from(
   new Set(
     (uniqueRequests || [])
-      .filter(req => req.status === 'approved')
+      .filter(req => req.status === 'approved' && req.date)
       .map(req => normalizeDateString(req.date))
+      .filter(Boolean)
   )
 );
 
@@ -1947,8 +2003,9 @@ const approvedDates = Array.from(
 const completedDates = Array.from(
   new Set(
     (uniqueRequests || [])
-      .filter(req => req.status === 'completed')
+      .filter(req => req.status === 'completed' && req.date)
       .map(req => normalizeDateString(req.date))
+      .filter(Boolean)
   )
 );
 // 用途：把某個大廚通知標記為已讀，並寫入 Firebase
@@ -3355,10 +3412,31 @@ const loadTagCategoriesFromFirebase = async () => {
       return;
     }
 
-    if (currentGroup.tagCategories) {
-      setDynamicCategories(currentGroup.tagCategories);
+const firebaseTagCategories = currentGroup.tagCategories;
+
+    const isValidTagCategories =
+      firebaseTagCategories &&
+      typeof firebaseTagCategories === 'object' &&
+      !Array.isArray(firebaseTagCategories);
+
+    if (isValidTagCategories) {
+      setDynamicCategories(firebaseTagCategories);
     } else {
       setDynamicCategories(INITIAL_TAG_CATEGORIES);
+
+      // 修復舊資料：如果 Firebase 入面之前存錯成 []，自動寫回正確 object
+      await db.collection('familyGroups').update(currentGroup.id, {
+        groupName: currentGroup.groupName || '',
+        inviteCode: currentGroup.inviteCode || '',
+        createdByEmail: currentGroup.createdByEmail || '',
+        createdByNickname: currentGroup.createdByNickname || '',
+        ownerEmail: currentGroup.ownerEmail || '',
+        adminEmails: Array.isArray(currentGroup.adminEmails) ? currentGroup.adminEmails : [],
+        memberNames: Array.isArray(currentGroup.memberNames) ? currentGroup.memberNames : [],
+        memberEmails: Array.isArray(currentGroup.memberEmails) ? currentGroup.memberEmails : [],
+        tagCategories: INITIAL_TAG_CATEGORIES,
+        createdAt: currentGroup.createdAt || new Date()
+      });
     }
   } catch (error) {
     console.log('loadTagCategoriesFromFirebase error:', error);
@@ -3369,6 +3447,13 @@ const loadTagCategoriesFromFirebase = async () => {
 // 用途：把分類 / 標籤設定儲存到目前群組 Firebase 文件
 const saveTagCategoriesToFirebase = async (nextCategories) => {
   try {
+    const safeNextCategories =
+      nextCategories &&
+      typeof nextCategories === 'object' &&
+      !Array.isArray(nextCategories)
+        ? nextCategories
+        : INITIAL_TAG_CATEGORIES;
+
     if (!groupInviteCode) {
       return showMessage('沒有此群組。');
     }
@@ -3393,7 +3478,7 @@ const saveTagCategoriesToFirebase = async (nextCategories) => {
       memberEmails: Array.isArray(currentGroup.memberEmails) ? currentGroup.memberEmails : [],
 
       // 用途：群組共用分類 / 標籤設定
-      tagCategories: nextCategories,
+      tagCategories: safeNextCategories,
 
       createdAt: currentGroup.createdAt || new Date()
     });
@@ -3516,7 +3601,8 @@ const handleSaveTagsAndCategories = async () => {
 const loadDishes = async () => {
   try {
     const allDishes = await db.collection('dishes').getAll();
-    setDishes(allDishes || []);
+setDishes(Array.isArray(allDishes) ? allDishes : []);
+
     console.log('已從 Firebase 載入 dishes:', allDishes);
   } catch (error) {
     console.log('loadDishes error:', error);
@@ -3992,20 +4078,20 @@ const handleCellPress = (day) => {
   }
 
   // 未來日期且沒有排餐，才問是否去點菜
-  showConfirmMessage(
-
-    `📅 ${clickedDate} 目前尚無確認排餐！\n要現在去挑選菜餚提出建議嗎？`,
-    [
-      { text: '先不用', style: 'cancel' },
-      {
-        text: '去點菜',
-        onPress: () => {
-          setCustomDateInput(clickedDate);
-          setCurrentTab('home');
-        }
+showConfirmMessage(
+  `📅 ${clickedDate} 目前尚無確認排餐！`,
+  '要現在去挑選菜餚提出建議嗎？',
+  [
+    { text: '先不用', style: 'cancel' },
+    {
+      text: '去點菜',
+      onPress: () => {
+        setCustomDateInput(clickedDate);
+        setCurrentTab('home');
       }
-    ]
-  );
+    }
+  ]
+);
 };
 
 const renderTagButtons = (tags, currentSelected, onToggle) => {
@@ -4330,7 +4416,7 @@ return (
     }
   }}
   scrollEventThrottle={16}
-  ref={(ref) => { this.scrollViewRef = ref; }}
+  ref={scrollViewRef}
 >
       {/* 頁面頂部 header：跟內容一起捲動，不固定置頂 */}
       <View style={styles.header}>
@@ -5375,7 +5461,7 @@ return (
   <TouchableOpacity
     style={styles.scrollTopButton}
     onPress={() => {
-      this.scrollViewRef?.scrollTo({ y: 0, animated: true });
+      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
     }}
   >
     <Text style={styles.scrollTopText}>⬆</Text>
@@ -5950,7 +6036,7 @@ contentContainerStyle={{
     </View>
   </View>
 </Modal>
-//* 日曆 Modal */
+{/* 日曆 Modal */}
 <Modal
   visible={calendarVisible}
   transparent
