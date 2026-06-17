@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "eatwhatah",
-    "slug": "eatwhatah",
+    "name": "eat what ah",
+    "slug": "eat-what-ah",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.heiyuu.eatwhatah",
+      "bundleIdentifier": "com.yiuc.eatwhatah",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -25,22 +25,21 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.heiyuu.eatwhatah"
+      "package": "com.yiuc.eatwhatah"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "extra": {
       "eas": {
-        "projectId": "23a717d6-a7c3-437f-ba6f-61a313fed841"
+        "projectId": "abe488d2-19f2-47af-ab41-6ba2a1cde201"
       }
     },
-    "owner": "heiyuu",
+    "owner": "yiuc",
     "runtimeVersion": {
       "policy": "appVersion"
     },
     "updates": {
-      "url": "https://u.expo.dev/23a717d6-a7c3-437f-ba6f-61a313fed841",
       "enabled": true
     }
   }
