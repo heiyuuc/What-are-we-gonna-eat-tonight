@@ -82,10 +82,15 @@ const [selectedDishIdsForHide, setSelectedDishIdsForHide] = useState([]);
 // 用途：把登入資料存在手機，之後開 App 可以自動登入
 const saveLoginSessionToDevice = async (user, loginEmail) => {
   try {
+    if (!user?.idToken || !user?.localId) {
+      console.log('saveLoginSessionToDevice skipped: invalid user', user);
+      return;
+    }
+
     await AsyncStorage.setItem(
       SAVED_LOGIN_KEY,
       JSON.stringify({
-        email: loginEmail,
+        email: String(loginEmail || '').trim().toLowerCase(),
         idToken: user.idToken,
         localId: user.localId,
         refreshToken: user.refreshToken || '',
@@ -201,11 +206,6 @@ useEffect(() => {
  // 登入與註冊邏輯
 // 用途：登入 Firebase Auth，然後讀取 Firestore 入面自己的 user profile
 // 用途：登入 Firebase Auth，然後讀取 Firestore 入面自己的 user profile
-const handleLogin = async () => {
-  try {
-    if (!email || !password) {
-      return showMessage('請輸入電郵和密碼。');
-    }
 
    const handleLogin = async () => {
   try {
@@ -216,13 +216,16 @@ const handleLogin = async () => {
       return showMessage('請輸入電郵和密碼。');
     }
 
-    const user = await loginWithEmail(loginEmail, loginPassword);
+const user = await loginWithEmail(loginEmail, password);
 
-    if (!user?.idToken || !user?.localId) {
-      return showMessage('登入失敗', '無法取得登入資料，請再試一次。');
-    }
+console.log('LOGIN_RETURN_USER:', user);
+console.log('LOGIN_RETURN_KEYS:', user ? Object.keys(user) : 'no user');
 
-    setAuthToken(user.idToken);
+if (!user?.idToken || !user?.localId) {
+  return showMessage('登入失敗', '無法取得登入資料，請再試一次。');
+}
+
+setAuthToken(user.idToken);
 
     await saveLoginSessionToDevice(user, loginEmail);
 
@@ -235,11 +238,7 @@ const handleLogin = async () => {
   }
 };
 
-    console.log("成功登入:", user);
-  } catch (err) {
-    showMessage('登入失敗', err.message || String(err));
-  }
-};
+
 
 
 // 註冊呼叫範例

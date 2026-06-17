@@ -108,9 +108,9 @@ export const refreshAuthToken = async (refreshToken) => {
   authToken = data.id_token;
 
   return {
-    idToken: data.id_token,
-    refreshToken: data.refresh_token,
-    userId: data.user_id,
+    idToken: data.id_token || data.idToken || '',
+    refreshToken: data.refresh_token || data.refreshToken || '',
+    userId: data.user_id || data.localId || '',
     expiresIn: data.expires_in
   };
 };  
