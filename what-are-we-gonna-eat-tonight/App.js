@@ -10,26 +10,6 @@ function AppContent() {
   const scrollViewRef = useRef(null);
 
 
-//即時update
-useEffect(() => {
-  const checkForUpdates = async () => {
-    try {
-      if (__DEV__) return;
-
-      const update = await Updates.checkForUpdateAsync();
-
-      if (update.isAvailable) {
-        await Updates.fetchUpdateAsync();
-        await Updates.reloadAsync();
-      }
-    } catch (error) {
-      console.log('checkForUpdates error:', error);
-    }
-  };
-
-  checkForUpdates();
-}, []);
-
   const insets = useSafeAreaInsets();
 //key
 const SAVED_LOGIN_KEY = 'what_are_we_gonna_eat_saved_login_v1';
@@ -1507,6 +1487,26 @@ const handleSaveProfile = async () => {
     showMessage('更新失敗', error.message || String(error));
   }
 };
+
+//即時update
+useEffect(() => {
+  const checkForUpdates = async () => {
+    try {
+      if (__DEV__) return;
+
+      const update = await Updates.checkForUpdateAsync();
+
+      if (update.isAvailable) {
+        await Updates.fetchUpdateAsync();
+        await Updates.reloadAsync();
+      }
+    } catch (error) {
+      console.log('checkForUpdates error:', error);
+    }
+  };
+
+  checkForUpdates();
+}, []);
 
 // 常見食材與分類庫
 const INITIAL_TAG_CATEGORIES = {
