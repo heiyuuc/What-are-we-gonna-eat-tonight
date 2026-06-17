@@ -2,6 +2,7 @@
   "cli": {
     "version": ">= 20.1.0",
     "appVersionSource": "remote"
+    "requireCommit": true
   },
   "build": {
     "development": {
@@ -13,6 +14,7 @@
     },
     "production": {
       "autoIncrement": true
+      "channel": "production"
     }
   },
   "submit": {
