@@ -11,6 +11,8 @@ function AppContent() {
 
 
   const insets = useSafeAreaInsets();
+
+
 //key
 const SAVED_LOGIN_KEY = 'what_are_we_gonna_eat_saved_login_v1';
 const LAST_SELECTION_KEY = 'what_are_we_gonna_eat_last_selection_v1';
@@ -65,14 +67,16 @@ const saveLoginSessionToDevice = async (user, loginEmail) => {
   try {
     const savedEmail = String(loginEmail || '').trim().toLowerCase();
 
+    // 用途：兼容 Firebase Auth 不同 endpoint 的回傳格式
+    // signIn / signUp 多數是 idToken、refreshToken、localId
+    // refresh token endpoint 多數是 id_token、refresh_token、user_id
     const idToken = user?.idToken || user?.id_token || '';
     const refreshToken = user?.refreshToken || user?.refresh_token || '';
     const localId = user?.localId || user?.userId || user?.user_id || '';
 
-    // Firebase Auth 通常回傳 expiresIn: "3600"
     const expiresInSeconds = Number(user?.expiresIn || user?.expires_in || 3600);
 
-    // 提早 5 分鐘當作過期，避免剛好 request 時過期
+    // 用途：記錄 token 到期時間，提早 5 分鐘當過期，避免 request 時剛好失效
     const expiresAt = Date.now() + Math.max(expiresInSeconds - 300, 60) * 1000;
 
     if (!savedEmail || !idToken || !localId || !refreshToken) {
@@ -241,8 +245,8 @@ const user = await loginWithEmail(loginEmail, password);
 console.log('LOGIN_RETURN_USER:', user);
 console.log('LOGIN_RETURN_KEYS:', user ? Object.keys(user) : 'no user');
 
-if (!user?.idToken || !user?.localId) {
-  return showMessage('登入失敗', '無法取得登入資料，請再試一次。');
+if (!user?.idToken || !user?.localId || !user?.refreshToken) {
+  return showMessage('登入失敗', '無法取得完整登入資料，請再試一次。');
 }
 
 setAuthToken(user.idToken, user.refreshToken, user.expiresIn);
@@ -278,9 +282,9 @@ const handleRegister = async () => {
 
     const user = await registerWithEmail(registerEmail, registerPassword);
 
-    if (!user?.idToken || !user?.localId) {
-      return showMessage('註冊失敗', '無法取得登入資料，請再試一次。');
-    }
+if (!user?.idToken || !user?.localId || !user?.refreshToken) {
+  return showMessage('註冊失敗', '無法取得完整登入資料，請再試一次。');
+}
 
     // 存 token 給 Firestore 用
 setAuthToken(user.idToken, user.refreshToken, user.expiresIn);
@@ -288,23 +292,25 @@ setAuthToken(user.idToken, user.refreshToken, user.expiresIn);
     // 存登入紀錄到手機，之後開 App 可以自動登入
     await saveLoginSessionToDevice(user, registerEmail);
 
-    await db.collection('users').add({
-      uid: user.localId,
-      email: registerEmail,
-      nickname: nickname,
-      userRole: userRole || 'eat',
-      familyGroupName: '',
-      groupInviteCode: '',
-      groupRole: 'member',
-      accountStatus: 'active',
-      createdAt: new Date()
-    });
+await db.collection('users').add({
+  uid: user.localId,
+  email: registerEmail,
+  nickname: nickname.trim(),
+  userRole: userRole || 'eat',
+  familyGroupName: '',
+  groupInviteCode: '',
+  groupRole: 'member',
+  accountStatus: 'active',
+  createdAt: new Date()
+});
 
-    // 剛註冊時未加入任何群組，所以沒有 admin 權限
-    setGroupRole('member');
-    setGroupAdminEmails([]);
+// 剛註冊時未加入任何群組，所以沒有 admin 權限
+setEmail(registerEmail);
+setNickname(nickname.trim());
+setGroupRole('member');
+setGroupAdminEmails([]);
 
-    setAppStage('group_setup');
+setAppStage('group_setup');
   } catch (err) {
     showMessage('註冊失敗', err.message || String(err));
   }
@@ -4980,7 +4986,7 @@ const renderSubTabButton = (label, isActive, onPress) => {
 
 
 
-// ================= 各種 Modals =================
+// ================= 各種 頁面 =================
 
       
 // 用途：App 開啟時先檢查是否有已儲存登入；未檢查完之前先不顯示 login

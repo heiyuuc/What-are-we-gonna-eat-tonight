@@ -1,0 +1,1897 @@
+JsonFileError: Error parsing JSON: import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { StatusBar, StyleSheet, Text, View, ScrollView, TouchableOpacity, TextInput, Modal, Button, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
+import {  db,  registerWithEmail,  loginWithEmail,  setAuthToken,  clearAuthToken,  deleteCurrentAccount,  reauthenticateCurrentUser,  refreshAuthToken} from './firebase';
+import * as Clipboard from 'expo-clipboard';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Calendar } from 'react-native-calendars';
+import * as Updates from 'expo-updates';
+function AppContent() {
+  const scrollViewRef = useRef(null);
+
+
+  const insets = useSafeAreaInsets();
+
+
+//key
+const SAVED_LOGIN_KEY = 'what_are_we_gonna_eat_saved_login_v1';
+const LAST_SELECTION_KEY = 'what_are_we_gonna_eat_last_selection_v1';
+const LAST_FRUIT_SELECTION_KEY = 'what_are_we_gonna_eat_last_fruit_selection_v1';
+
+
+// 流程導航: 'login' -> 'register' -> 'group_setup' -> 'main'
+const [appStage, setAppStage] = useState('login');
+
+// 用途：App 開啟時，先檢查手機是否已有登入紀錄
+const [isCheckingSavedLogin, setIsCheckingSavedLogin] = useState(true);
+
+  // 主App分頁: 'home', 'group', 'add', 'profile'
+  const [currentTab, setCurrentTab] = useState('home');
+  const CURRENT_DATE = new Date();
+
+//一鍵返回最頂
+const [showScrollTopBtn, setShowScrollTopBtn] = useState(false);
+
+ // 用戶與註冊狀態
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [inputInviteCode, setInputInviteCode] = useState('');
+  const [userRole, setUserRole] = useState('eat');
+  const [familyGroupName, setFamilyGroupName] = useState('');
+  const [groupInviteCode, setGroupInviteCode] = useState('');
+  const [groupRole, setGroupRole] = useState('member');
+
+// 用途：記錄目前群組真正有管理權限的 email
+const [groupAdminEmails, setGroupAdminEmails] = useState([]);
+
+// 用途：判斷目前登入者是否有管理權限
+// 之後一律以 familyGroups.adminEmails 為準
+const isCurrentUserAdmin = groupAdminEmails.includes(email);
+
+// 用途：家庭菜餚庫是否進入編輯模式
+const [isDishEditMode, setIsDishEditMode] = useState(false);
+
+// 用途：家庭菜餚庫編輯模式下，用來搜尋要隱藏的菜式
+const [dishEditSearchQuery, setDishEditSearchQuery] = useState('');
+// 用途：家庭菜餚庫編輯模式下，記錄已勾選要隱藏的菜式 id
+const [selectedDishIdsForHide, setSelectedDishIdsForHide] = useState([]); 
+  // 編輯模式狀態
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [editNickname, setEditNickname] = useState(nickname);
+  const [editRole, setEditRole] = useState(userRole);
+  const [editGroupName, setEditGroupName] = useState(familyGroupName);
+// 用途：把登入資料存在手機，之後開 App 可以自動登入
+const saveLoginSessionToDevice = async (user, loginEmail) => {
+  try {
+    const savedEmail = String(loginEmail || '').trim().toLowerCase();
+
+    // 用途：兼容 Firebase Auth 不同 endpoint 的回傳格式
+    // signIn / signUp 多數是 idToken、refreshToken、localId
+    // refresh token endpoint 多數是 id_token、refresh_token、user_id
+    const idToken = user?.idToken || user?.id_token || '';
+    const refreshToken = user?.refreshToken || user?.refresh_token || '';
+    const localId = user?.localId || user?.userId || user?.user_id || '';
+
+    const expiresInSeconds = Number(user?.expiresIn || user?.expires_in || 3600);
+
+    // 用途：記錄 token 到期時間，提早 5 分鐘當過期，避免 request 時剛好失效
+    const expiresAt = Date.now() + Math.max(expiresInSeconds - 300, 60) * 1000;
+
+    if (!savedEmail || !idToken || !localId || !refreshToken) {
+      console.log('saveLoginSessionToDevice skipped: invalid user', user);
+      return;
+    }
+
+    await AsyncStorage.setItem(
+      SAVED_LOGIN_KEY,
+      JSON.stringify({
+        email: savedEmail,
+        idToken,
+        localId,
+        refreshToken,
+        expiresAt,
+        savedAt: Date.now()
+      })
+    );
+  } catch (error) {
+    console.log('saveLoginSessionToDevice error:', error);
+  }
+};
+
+// 用途：登出時清除手機內的登入資料
+const clearLoginSessionFromDevice = async () => {
+  try {
+    await AsyncStorage.removeItem(SAVED_LOGIN_KEY);
+  } catch (error) {
+    console.log('clearLoginSessionFromDevice error:', error);
+  }
+};
+
+// 用途：登入成功 / 自動登入成功後，讀取 Firestore 的 user profile，然後決定進 main 還是 group_setup
+const loadUserProfileAfterAuth = async (loginEmail) => {
+  const users = await db.collection('users').getAll();
+  const me = users.find(u => u.email === loginEmail);
+
+  setEmail(loginEmail);
+
+  if (me) {
+    setNickname(me.nickname || '');
+    setUserRole(me.userRole || 'eat');
+    setFamilyGroupName(me.familyGroupName || '');
+    setGroupInviteCode(me.groupInviteCode || '');
+
+    let finalGroupRole = 'member';
+    let finalAdminEmails = [];
+
+let hasValidGroup = false;
+
+if (me.groupInviteCode) {
+  const groups = await db.collection('familyGroups').getAll();
+  const safeGroups = Array.isArray(groups) ? groups : [];
+
+  const currentGroup = safeGroups.find(g => g.inviteCode === me.groupInviteCode);
+
+  if (currentGroup) {
+    hasValidGroup = true;
+
+    finalAdminEmails = Array.isArray(currentGroup.adminEmails)
+      ? currentGroup.adminEmails
+      : [];
+
+    finalGroupRole = finalAdminEmails.includes(loginEmail) ? 'admin' : 'member';
+  } else {
+    setFamilyGroupName('');
+    setGroupInviteCode('');
+  }
+}
+
+setGroupRole(finalGroupRole);
+setGroupAdminEmails(finalAdminEmails);
+
+if (hasValidGroup) {
+  setAppStage('main');
+} else {
+  setAppStage('group_setup');
+}
+  } else {
+    setGroupRole('member');
+    setGroupAdminEmails([]);
+    setAppStage('group_setup');
+  }
+};
+
+// 用途：App 每次打開時，先檢查手機是否已有登入紀錄；有就用 refreshToken 換新 idToken 再進入 App
+useEffect(() => {
+  const restoreLoginSessionFromDevice = async () => {
+    try {
+      const savedLoginText = await AsyncStorage.getItem(SAVED_LOGIN_KEY);
+
+      if (!savedLoginText) {
+        setAppStage('login');
+        return;
+      }
+
+      const savedLogin = JSON.parse(savedLoginText);
+
+      if (!savedLogin?.email || !savedLogin?.refreshToken) {
+        await clearLoginSessionFromDevice();
+        clearAuthToken();
+        setAppStage('login');
+        return;
+      }
+
+      // 重要：不要長期直接用舊 idToken
+      // App 重新開啟時，先用 refreshToken 換新 idToken
+      const refreshedUser = await refreshAuthToken(savedLogin.refreshToken);
+
+      if (!refreshedUser?.idToken) {
+        await clearLoginSessionFromDevice();
+        clearAuthToken();
+        setAppStage('login');
+        return;
+      }
+
+      const nextSession = {
+        idToken: refreshedUser.idToken,
+        refreshToken: refreshedUser.refreshToken || savedLogin.refreshToken,
+        localId: savedLogin.localId || refreshedUser.userId || '',
+        expiresIn: refreshedUser.expiresIn || 3600
+      };
+
+      // 更新 firebase.js 內記憶體 token
+      setAuthToken(
+        nextSession.idToken,
+        nextSession.refreshToken,
+        nextSession.expiresIn
+      );
+
+      // 更新手機內保存的最新 token
+      await saveLoginSessionToDevice(nextSession, savedLogin.email);
+
+      await loadUserProfileAfterAuth(savedLogin.email);
+    } catch (error) {
+      console.log('restoreLoginSessionFromDevice error:', error);
+
+      await clearLoginSessionFromDevice();
+      clearAuthToken();
+      setAppStage('login');
+    } finally {
+      setIsCheckingSavedLogin(false);
+    }
+  };
+
+  restoreLoginSessionFromDevice();
+}, []);
+
+
+
+ // 登入與註冊邏輯
+// 用途：登入 Firebase Auth，然後讀取 Firestore 入面自己的 user profile
+// 用途：登入 Firebase Auth，然後讀取 Firestore 入面自己的 user profile
+
+   const handleLogin = async () => {
+  try {
+    const loginEmail = email.trim().toLowerCase();
+    const loginPassword = password;
+
+    if (!loginEmail || !loginPassword) {
+      return showMessage('請輸入電郵和密碼。');
+    }
+
+const user = await loginWithEmail(loginEmail, password);
+
+console.log('LOGIN_RETURN_USER:', user);
+console.log('LOGIN_RETURN_KEYS:', user ? Object.keys(user) : 'no user');
+
+if (!user?.idToken || !user?.localId || !user?.refreshToken) {
+  return showMessage('登入失敗', '無法取得完整登入資料，請再試一次。');
+}
+
+setAuthToken(user.idToken, user.refreshToken, user.expiresIn);
+
+    await saveLoginSessionToDevice(user, loginEmail);
+
+    await loadUserProfileAfterAuth(loginEmail);
+
+    console.log('成功登入:', user.localId);
+  } catch (err) {
+    console.log('handleLogin error:', err);
+    showMessage('登入失敗', err.message || String(err));
+  }
+};
+
+
+
+
+// 註冊呼叫範例
+// 用途：註冊 Firebase Auth 帳號，並建立 users profile
+const handleRegister = async () => {
+  try {
+    const registerEmail = email.trim().toLowerCase();
+    const registerPassword = password;
+
+    if (!nickname.trim() || !registerEmail || !registerPassword || !confirmPassword) {
+      return showMessage('所有欄位皆為必填。');
+    }
+
+    if (registerPassword !== confirmPassword) {
+      return showMessage('兩次輸入的密碼不一致。');
+    }
+
+    const user = await registerWithEmail(registerEmail, registerPassword);
+
+if (!user?.idToken || !user?.localId || !user?.refreshToken) {
+  return showMessage('註冊失敗', '無法取得完整登入資料，請再試一次。');
+}
+
+    // 存 token 給 Firestore 用
+setAuthToken(user.idToken, user.refreshToken, user.expiresIn);
+
+    // 存登入紀錄到手機，之後開 App 可以自動登入
+    await saveLoginSessionToDevice(user, registerEmail);
+
+await db.collection('users').add({
+  uid: user.localId,
+  email: registerEmail,
+  nickname: nickname.trim(),
+  userRole: userRole || 'eat',
+  familyGroupName: '',
+  groupInviteCode: '',
+  groupRole: 'member',
+  accountStatus: 'active',
+  createdAt: new Date()
+});
+
+// 剛註冊時未加入任何群組，所以沒有 admin 權限
+setEmail(registerEmail);
+setNickname(nickname.trim());
+setGroupRole('member');
+setGroupAdminEmails([]);
+
+setAppStage('group_setup');
+  } catch (err) {
+    showMessage('註冊失敗', err.message || String(err));
+  }
+};
+
+  // 核心成員名單狀態
+const [members, setMembers] = useState([
+  { id: 'me', name: '吃貨小明 (我自己)', isMe: true, isPrimaryCook: false }
+]);
+
+
+
+// 用途：控制「修改家庭群組名稱」獨立編輯模式
+const [isEditingGroupName, setIsEditingGroupName] = useState(false);
+
+// 用途：控制「家庭群組成員管理」是否進入管理模式
+const [isManagingMembers, setIsManagingMembers] = useState(false);
+
+// 用途：真正從 Firebase 讀取的家庭群組成員
+const [groupMembers, setGroupMembers] = useState([]);
+
+
+  // 用於點菜視窗等其他地方的動態組合名單
+  const familyMembers = useMemo(() => {
+    return members.map(m => m.isMe ? { ...m, name: `${nickname} (我自己)`, isPrimaryCook: userRole === 'cook' } : m);
+  }, [members, nickname, userRole]);
+
+// 群組碼產生器
+const generateInviteCode = () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+};
+
+
+const generateUniqueInviteCode = async () => {
+  const groups = await db.collection('familyGroups').getAll();
+const safeGroups = Array.isArray(groups) ? groups : [];
+
+  let newCode = '';
+  let exists = true;
+
+  while (exists) {
+    newCode = generateInviteCode();
+    exists = safeGroups.some(group => group.inviteCode === newCode);
+  }
+
+  return newCode;
+};
+// 用途：長按複製家庭群組代碼
+const handleCopyGroupInviteCode = async () => {
+  try {
+    if (!groupInviteCode) {
+      return showMessage('目前沒有群組代碼。');
+    }
+
+    await Clipboard.setStringAsync(groupInviteCode);
+
+    showMessage('已複製群組代碼。');
+  } catch (error) {
+    console.log('handleCopyGroupInviteCode error:', error);
+    showMessage('複製失敗', error.message || String(error));
+  }
+};
+//「創建群組」function
+// 用途：建立家庭群組，並同步更新自己 users profile
+const handleCreateFamilyGroup = async () => {
+  try {
+    const groupName = familyGroupName.trim() || `${nickname}的家庭群組`;
+
+    const newCode = await generateUniqueInviteCode();
+
+const defaultTagCategories =
+  typeof INITIAL_TAG_CATEGORIES !== 'undefined' &&
+  INITIAL_TAG_CATEGORIES &&
+  typeof INITIAL_TAG_CATEGORIES === 'object' &&
+  !Array.isArray(INITIAL_TAG_CATEGORIES)
+    ? INITIAL_TAG_CATEGORIES
+    : {};
+
+
+    const groupData = {
+      groupName: groupName,
+      inviteCode: newCode,
+      createdByEmail: email,
+      createdByNickname: nickname,
+
+      // 群組權限資料
+      ownerEmail: email,
+      adminEmails: [email],
+
+      // 群組成員資料
+      memberNames: [nickname],
+      memberEmails: [email],
+
+      // 用途：群組共用分類 / 標籤設定
+      tagCategories: defaultTagCategories,
+
+      createdAt: new Date()
+    };
+
+    // 1. 新增群組到 Firebase
+    await db.collection('familyGroups').add(groupData);
+
+    // 2. 更新自己 users profile
+ const users = await db.collection('users').getAll();
+const safeUsers = Array.isArray(users) ? users : [];
+const me = safeUsers.find(u => u.email === email);
+
+if (!me?.id) {
+  return showMessage('建立群組失敗', '找不到你的用戶資料，請重新登入後再試。');
+}
+
+await db.collection('users').update(me.id, {
+  uid: me.uid || '',
+  email: email,
+  nickname: nickname,
+  userRole: userRole || 'eat',
+  familyGroupName: groupName,
+  groupInviteCode: newCode,
+  groupRole: 'admin',
+  accountStatus: me.accountStatus || 'active',
+  createdAt: me.createdAt || new Date()
+});
+
+    // 3. 更新本機畫面 state
+setFamilyGroupName(groupName);
+setGroupInviteCode(newCode);
+setGroupRole('admin');
+setGroupAdminEmails([email]);
+
+    setAppStage('main');
+  } catch (error) {
+    console.log('handleCreateFamilyGroup error:', error);
+    showMessage('建立群組失敗', error.message || String(error));
+  }
+};
+
+// 用途：從 Firebase 讀取目前群組的所有成員，並顯示每個人的暱稱和 userRole
+const loadGroupMembersFromFirebase = async () => {
+  try {
+    if (!groupInviteCode) {
+      setGroupMembers([]);
+      return;
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    if (!currentGroup) {
+      setGroupMembers([]);
+      return;
+    }
+
+    const users = await db.collection('users').getAll();
+
+const memberEmails = Array.isArray(currentGroup.memberEmails)
+  ? currentGroup.memberEmails
+  : [];
+
+const memberNames = Array.isArray(currentGroup.memberNames)
+  ? currentGroup.memberNames
+  : [];
+
+const currentAdminEmails = Array.isArray(currentGroup.adminEmails)
+  ? currentGroup.adminEmails
+  : [];
+
+let loadedMembers = [];
+
+    // 優先用 memberEmails，因為 email 可以對應 users 裡面的 userRole
+    if (memberEmails.length > 0) {
+      loadedMembers = memberEmails.map((memberEmail, index) => {
+        const userData = users.find(u => u.email === memberEmail);
+
+return {
+  id: userData?.id || memberEmail || String(index),
+  email: memberEmail,
+  name: userData?.nickname || (memberEmail === email ? nickname : memberEmail),
+  userRole: userData?.userRole || (memberEmail === email ? userRole : 'eat'),
+
+  // 用途：現在只用 adminEmails 判斷此成員是否 admin
+  groupRole: currentAdminEmails.includes(memberEmail) ? 'admin' : 'member',
+  isAdmin: currentAdminEmails.includes(memberEmail),
+
+  isMe: memberEmail === email
+};
+      });
+    } else {
+      // 舊資料 fallback：如果舊群組只有 memberNames，仍然先顯示名字
+      loadedMembers = memberNames.map((name, index) => {
+  return {
+    id: `name-${index}`,
+    email: '',
+    name: name,
+    userRole: name === nickname ? userRole : 'eat',
+    groupRole: 'member',
+    isAdmin: false,
+    isMe: name === nickname
+  };
+});
+
+    }
+
+ // 分頁5：讓「我自己」永遠排在最上面
+const sortedMembers = [...loadedMembers].sort((a, b) => {
+  if (a.isMe && !b.isMe) return -1;
+  if (!a.isMe && b.isMe) return 1;
+  return 0;
+});
+
+setGroupMembers(sortedMembers);
+setGroupAdminEmails(currentAdminEmails);
+
+  } catch (error) {
+    console.log('loadGroupMembersFromFirebase error:', error);
+    showMessage('載入成員失敗', error.message || String(error));
+  }
+};
+
+
+// 用途：登入、加入群組、切換群組、改暱稱或角色後，自動重新載入 Firebase 成員名單
+useEffect(() => {
+  if (appStage !== 'main') return;
+  if (!email || !groupInviteCode) return;
+
+  loadGroupMembersFromFirebase();
+}, [appStage, groupInviteCode, email, nickname, userRole]);
+
+// 用途：admin 可以指定或取消其他人成為 admin
+// 注意：ownerEmail 只作紀錄，不再自動等於 admin
+const handleToggleAdmin = async (member) => {
+  try {
+    if (!isCurrentUserAdmin) {
+      return 
+    }
+
+    if (member.isMe) {
+      return showMessage('不能更改自己的管理員身份。');
+    }
+
+    if (!member.email) {
+      return showMessage('錯誤，無設定此帳為管理員。');
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    if (!currentGroup) {
+      return showMessage('錯誤', '找不到目前群組資料。');
+    }
+
+    let adminEmails = Array.isArray(currentGroup.adminEmails)
+      ? [...currentGroup.adminEmails]
+      : [];
+
+    const isAlreadyAdmin = adminEmails.includes(member.email);
+
+    if (isAlreadyAdmin) {
+      // 不可以取消最後一位 admin，避免整個群組無人可以管理
+      if (adminEmails.length <= 1) {
+        return showMessage('群組至少需要一位管理員。');
+      }
+
+      adminEmails = adminEmails.filter(e => e !== member.email);
+    } else {
+      adminEmails = [...adminEmails, member.email];
+    }
+
+    await db.collection('familyGroups').update(currentGroup.id, {
+      groupName: currentGroup.groupName || '',
+      inviteCode: currentGroup.inviteCode || '',
+      createdByEmail: currentGroup.createdByEmail || '',
+      createdByNickname: currentGroup.createdByNickname || '',
+
+      // ownerEmail 只作建立者紀錄，不再影響權限
+      ownerEmail: currentGroup.ownerEmail || '',
+
+      // 真正權限來源
+      adminEmails: adminEmails,
+
+      memberNames: currentGroup.memberNames || [],
+      memberEmails: currentGroup.memberEmails || [],
+      createdAt: currentGroup.createdAt || new Date()
+    });
+
+    const users = await db.collection('users').getAll();
+    const targetUser = users.find(u => u.email === member.email);
+
+    if (targetUser) {
+      await db.collection('users').update(targetUser.id, {
+        uid: targetUser.uid || '',
+        email: targetUser.email || '',
+        nickname: targetUser.nickname || '',
+        userRole: targetUser.userRole || 'eat',
+        familyGroupName: currentGroup.groupName || '',
+        groupInviteCode: currentGroup.inviteCode || '',
+
+        // groupRole 只分 admin / member，不再用 owner 做權限
+        groupRole: isAlreadyAdmin ? 'member' : 'admin',
+
+        accountStatus: targetUser.accountStatus || 'active',
+        createdAt: targetUser.createdAt || new Date()
+      });
+    }
+
+    // 如果改的是目前本機群組，立即同步 adminEmails state
+    setGroupAdminEmails(adminEmails);
+
+    await loadGroupMembersFromFirebase();
+
+
+  } catch (error) {
+    console.log('handleToggleAdmin error:', error);
+    showMessage('更新管理員失敗', error.message || String(error));
+  }
+};
+
+
+// 用途：admin 可以將 member 移出目前家庭群組
+// 注意：ownerEmail 只作紀錄，所以即使該成員是原建立者，也可以被 admin 移出群組
+const handleRemoveGroupMemberByAdmin = async (member) => {
+  try {
+    if (!isCurrentUserAdmin) {
+      return showMessage('只有管理員可以移除群組成員。');
+    }
+
+    if (member.isMe) {
+      return showMessage('不能移除自己');
+    }
+
+    if (!member.email) {
+      return showMessage('無法移除此成員。');
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    if (!currentGroup) {
+      return showMessage('錯誤沒有此群組。');
+    }
+
+    const oldMemberEmails = Array.isArray(currentGroup.memberEmails)
+      ? currentGroup.memberEmails
+      : [];
+
+    const oldMemberNames = Array.isArray(currentGroup.memberNames)
+      ? currentGroup.memberNames
+      : [];
+
+    const removeIndex = oldMemberEmails.findIndex(e => e === member.email);
+
+    const memberEmails = oldMemberEmails.filter(e => e !== member.email);
+
+    const memberNames =
+      removeIndex >= 0
+        ? oldMemberNames.filter((_, index) => index !== removeIndex)
+        : oldMemberNames.filter(n => n !== member.name);
+
+    let adminEmails = Array.isArray(currentGroup.adminEmails)
+      ? currentGroup.adminEmails.filter(e => e !== member.email)
+      : [];
+
+    // 如果移除後沒有 admin，就按剩餘成員加入順序補第一位做 admin
+    if (adminEmails.length === 0 && memberEmails.length > 0) {
+      adminEmails = [memberEmails[0]];
+    }
+
+    await db.collection('familyGroups').update(currentGroup.id, {
+      groupName: currentGroup.groupName || '',
+      inviteCode: currentGroup.inviteCode || '',
+      createdByEmail: currentGroup.createdByEmail || '',
+      createdByNickname: currentGroup.createdByNickname || '',
+
+      // ownerEmail 只作建立者紀錄，不再影響權限
+      ownerEmail: currentGroup.ownerEmail || '',
+
+      // 真正權限來源
+      adminEmails: adminEmails,
+
+      memberNames: memberNames,
+      memberEmails: memberEmails,
+      createdAt: currentGroup.createdAt || new Date()
+    });
+
+    const users = await db.collection('users').getAll();
+    const targetUser = users.find(u => u.email === member.email);
+
+    // 被移除的人清空群組資料
+    if (targetUser) {
+      await db.collection('users').update(targetUser.id, {
+        uid: targetUser.uid || '',
+        email: targetUser.email || '',
+        nickname: targetUser.nickname || '',
+        userRole: targetUser.userRole || 'eat',
+        familyGroupName: '',
+        groupInviteCode: '',
+        groupRole: 'member',
+        accountStatus: targetUser.accountStatus || 'active',
+        createdAt: targetUser.createdAt || new Date()
+      });
+    }
+
+    // 同步更新仍然是 admin 的 users groupRole
+    for (const adminEmail of adminEmails) {
+      const adminUser = users.find(u => u.email === adminEmail);
+
+      if (adminUser) {
+        await db.collection('users').update(adminUser.id, {
+          uid: adminUser.uid || '',
+          email: adminUser.email || '',
+          nickname: adminUser.nickname || '',
+          userRole: adminUser.userRole || 'eat',
+          familyGroupName: currentGroup.groupName || '',
+          groupInviteCode: currentGroup.inviteCode || '',
+          groupRole: 'admin',
+          accountStatus: adminUser.accountStatus || 'active',
+          createdAt: adminUser.createdAt || new Date()
+        });
+      }
+    }
+
+    // 同步本機 adminEmails state
+    setGroupAdminEmails(adminEmails);
+
+    await loadGroupMembersFromFirebase();
+
+    showMessage(`已將 ${member.name} 移出群組。`);
+  } catch (error) {
+    console.log('handleRemoveGroupMemberByAdmin error:', error);
+    showMessage('移除成員失敗', error.message || String(error));
+  }
+};
+
+// 用途：切換 / 加入群組，並同步 users profile、familyGroups 成員資料
+// 注意：ownerEmail 只作紀錄；真正管理權限只看 adminEmails
+const handleSwitchOrJoinGroup = async () => {
+  try {
+    const newCode = inputInviteCode.trim().toUpperCase();
+
+    if (!newCode) {
+      return showMessage('請輸入群組邀請碼');
+    }
+
+    // 如果本身已經在同一個群組
+    if (groupInviteCode && groupInviteCode === newCode) {
+      return showMessage('你已經在這個群組。');
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const targetGroup = groups.find(group => group.inviteCode === newCode);
+
+    if (!targetGroup) {
+      return showMessage('邀請碼不符。');
+    }
+
+    const users = await db.collection('users').getAll();
+
+    // =========================
+    // 1. 如果現在已有群組，先自動退出舊群組
+    // =========================
+    if (groupInviteCode) {
+      const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+      if (currentGroup) {
+        const oldMemberEmails = Array.isArray(currentGroup.memberEmails)
+          ? currentGroup.memberEmails
+          : [];
+
+        const oldMemberNames = Array.isArray(currentGroup.memberNames)
+          ? currentGroup.memberNames
+          : [];
+
+        const removeIndex = oldMemberEmails.findIndex(e => e === email);
+
+        const memberEmails = oldMemberEmails.filter(e => e !== email);
+
+        const memberNames =
+          removeIndex >= 0
+            ? oldMemberNames.filter((_, index) => index !== removeIndex)
+            : oldMemberNames.filter(n => n !== nickname);
+
+        let adminEmails = Array.isArray(currentGroup.adminEmails)
+          ? currentGroup.adminEmails.filter(e => e !== email)
+          : [];
+
+        // 如果退出後沒有 admin，但仍有成員，就按加入次序補第一位成員做 admin
+        if (adminEmails.length === 0 && memberEmails.length > 0) {
+          adminEmails = [memberEmails[0]];
+        }
+
+// 如果自己離開後，群組已經沒有任何成員，就直接刪除群組
+if (memberEmails.length === 0) {
+  await db.collection('familyGroups').delete(currentGroup.id);
+} else {
+  await db.collection('familyGroups').update(currentGroup.id, {
+    groupName: currentGroup.groupName || '',
+    inviteCode: currentGroup.inviteCode || '',
+    createdByEmail: currentGroup.createdByEmail || '',
+    createdByNickname: currentGroup.createdByNickname || '',
+
+    // ownerEmail 只作建立者紀錄，不再影響權限
+    ownerEmail: currentGroup.ownerEmail || '',
+
+    // 真正權限來源
+    adminEmails: adminEmails,
+
+    memberNames: memberNames,
+    memberEmails: memberEmails,
+    createdAt: currentGroup.createdAt || new Date()
+  });
+}
+
+        // 如果自動補了 admin，同步更新該 user 的 groupRole
+        for (const adminEmail of adminEmails) {
+          const adminUser = users.find(u => u.email === adminEmail);
+
+          if (adminUser) {
+            await db.collection('users').update(adminUser.id, {
+              uid: adminUser.uid || '',
+              email: adminUser.email || '',
+              nickname: adminUser.nickname || '',
+              userRole: adminUser.userRole || 'eat',
+              familyGroupName: currentGroup.groupName || '',
+              groupInviteCode: currentGroup.inviteCode || '',
+              groupRole: 'admin',
+              accountStatus: adminUser.accountStatus || 'active',
+              createdAt: adminUser.createdAt || new Date()
+            });
+          }
+        }
+      }
+    }
+
+    // =========================
+    // 2. 加入新群組
+    // =========================
+    const updatedMemberNames = Array.isArray(targetGroup.memberNames)
+      ? [...targetGroup.memberNames]
+      : [];
+
+    const updatedMemberEmails = Array.isArray(targetGroup.memberEmails)
+      ? [...targetGroup.memberEmails]
+      : [];
+
+    if (!updatedMemberNames.includes(nickname)) {
+      updatedMemberNames.push(nickname);
+    }
+
+    if (!updatedMemberEmails.includes(email)) {
+      updatedMemberEmails.push(email);
+    }
+
+    let targetAdminEmails = Array.isArray(targetGroup.adminEmails)
+      ? [...targetGroup.adminEmails]
+      : [];
+
+    // 防止舊群組沒有 adminEmails，導致全群組無 admin
+    // 如果目標群組完全沒有 admin，就按成員加入次序補第一位做 admin
+    if (targetAdminEmails.length === 0 && updatedMemberEmails.length > 0) {
+      targetAdminEmails = [updatedMemberEmails[0]];
+    }
+
+    await db.collection('familyGroups').update(targetGroup.id, {
+      groupName: targetGroup.groupName || '',
+      inviteCode: targetGroup.inviteCode || '',
+      createdByEmail: targetGroup.createdByEmail || '',
+      createdByNickname: targetGroup.createdByNickname || '',
+
+      // ownerEmail 只作紀錄
+      ownerEmail: targetGroup.ownerEmail || '',
+
+      // 真正權限來源
+      adminEmails: targetAdminEmails,
+
+      memberNames: updatedMemberNames,
+      memberEmails: updatedMemberEmails,
+      createdAt: targetGroup.createdAt || new Date()
+    });
+
+    // =========================
+    // 3. 更新自己 users profile
+    // =========================
+    const me = users.find(u => u.email === email);
+
+    const nextGroupRole = targetAdminEmails.includes(email) ? 'admin' : 'member';
+
+    if (me) {
+      await db.collection('users').update(me.id, {
+        uid: me.uid || '',
+        email: email,
+        nickname: nickname,
+        userRole: userRole || 'eat',
+        familyGroupName: targetGroup.groupName || '',
+        groupInviteCode: targetGroup.inviteCode || '',
+
+        // 只分 admin / member，不再用 owner 做權限
+        groupRole: nextGroupRole,
+
+        accountStatus: me.accountStatus || 'active',
+        createdAt: me.createdAt || new Date()
+      });
+    }
+
+    // 如果剛才自動補了某人做 admin，也同步更新那個人的 users profile
+    for (const adminEmail of targetAdminEmails) {
+      const adminUser = users.find(u => u.email === adminEmail);
+
+      if (adminUser) {
+        await db.collection('users').update(adminUser.id, {
+          uid: adminUser.uid || '',
+          email: adminUser.email || '',
+          nickname: adminUser.nickname || '',
+          userRole: adminUser.userRole || 'eat',
+          familyGroupName: targetGroup.groupName || '',
+          groupInviteCode: targetGroup.inviteCode || '',
+          groupRole: 'admin',
+          accountStatus: adminUser.accountStatus || 'active',
+          createdAt: adminUser.createdAt || new Date()
+        });
+      }
+    }
+
+    // =========================
+    // 4. 更新本機 state
+    // =========================
+    setFamilyGroupName(targetGroup.groupName || '');
+    setGroupInviteCode(targetGroup.inviteCode || '');
+    setGroupRole(nextGroupRole);
+    setGroupAdminEmails(targetAdminEmails);
+    setInputInviteCode('');
+
+    // 加入 / 切換群組成功後，進入主畫面
+    setAppStage('main');
+
+    // 不要在這裡直接 call loadGroupMembersFromFirebase()
+    // 因為 setGroupInviteCode 是非同步，直接 call 可能會讀到舊 groupInviteCode
+    // 下面的 useEffect 會在 groupInviteCode 更新後自動重新載入成員
+
+    showMessage(`成功加入群組：${targetGroup.groupName}`);
+  } catch (error) {
+    console.log('handleSwitchOrJoinGroup error:', error);
+    showMessage('加入群組失敗', error.message || String(error));
+  }
+};
+
+// 用途：當最後一位成員離開群組前，提醒群組資料會被清空
+const confirmLastMemberLeaveGroup = () => {
+  if (Platform.OS === 'web') {
+    const confirmed = window.confirm(
+      '你是這個群組最後一位成員。\n\n離開後，這個家庭群組會被刪除，群組資料將會被清空。\n\n你確定要離開嗎？'
+    );
+    return Promise.resolve(confirmed);
+  }
+
+  return new Promise((resolve) => {
+    Alert.alert(
+      '確認離開群組',
+      '你是這個群組最後一位成員。\n\n離開後，這個家庭群組會被刪除，群組資料將會被清空。\n\n你確定要離開嗎？',
+      [
+        {
+          text: '取消',
+          style: 'cancel',
+          onPress: () => resolve(false)
+        },
+        {
+          text: '確認離開',
+          style: 'destructive',
+          onPress: () => resolve(true)
+        }
+      ]
+    );
+  });
+};
+
+const handleLeaveCurrentGroup = async () => {
+  try {
+    if (!groupInviteCode) {
+      return showMessage('你目前未加入任何群組。');
+    }
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    if (!currentGroup) {
+      setFamilyGroupName('');
+      setGroupInviteCode('');
+      setGroupRole('member');
+      setGroupAdminEmails([]);
+      setInputInviteCode('');
+      setAppStage('group_setup');
+      setDynamicCategories(INITIAL_TAG_CATEGORIES);
+      return showMessage( '沒有此群組。');
+    }
+
+    // =========================
+    // 1. 從目前群組移除自己
+    // =========================
+    const oldMemberEmails = Array.isArray(currentGroup.memberEmails)
+      ? currentGroup.memberEmails
+      : [];
+
+    const oldMemberNames = Array.isArray(currentGroup.memberNames)
+      ? currentGroup.memberNames
+      : [];
+
+    const removeIndex = oldMemberEmails.findIndex(e => e === email);
+
+    const memberEmails = oldMemberEmails.filter(e => e !== email);
+
+    const memberNames =
+      removeIndex >= 0
+        ? oldMemberNames.filter((_, index) => index !== removeIndex)
+        : oldMemberNames.filter(n => n !== nickname);
+
+    let adminEmails = Array.isArray(currentGroup.adminEmails)
+      ? currentGroup.adminEmails.filter(e => e !== email)
+      : [];
+
+    // 如果自己離開後沒有 admin，但仍然有其他成員，就按加入順序補第一位做 admin
+    if (adminEmails.length === 0 && memberEmails.length > 0) {
+      adminEmails = [memberEmails[0]];
+    }
+
+    // =========================
+    // 2. 更新 familyGroups
+    // =========================
+  // 如果自己離開後，群組已經沒有任何成員，就直接刪除群組
+if (memberEmails.length === 0) {
+  await db.collection('familyGroups').delete(currentGroup.id);
+} else {
+  await db.collection('familyGroups').update(currentGroup.id, {
+    groupName: currentGroup.groupName || '',
+    inviteCode: currentGroup.inviteCode || '',
+    createdByEmail: currentGroup.createdByEmail || '',
+    createdByNickname: currentGroup.createdByNickname || '',
+
+    // ownerEmail 只作建立者紀錄，不再影響權限
+    ownerEmail: currentGroup.ownerEmail || '',
+
+    // 真正權限來源
+    adminEmails: adminEmails,
+
+    memberNames: memberNames,
+    memberEmails: memberEmails,
+    createdAt: currentGroup.createdAt || new Date()
+  });
+}
+
+    // =========================
+    // 3. 更新自己 users profile：清空群組資料
+    // =========================
+    const users = await db.collection('users').getAll();
+    const me = users.find(u => u.email === email);
+
+    if (me) {
+      await db.collection('users').update(me.id, {
+        uid: me.uid || '',
+        email: email,
+        nickname: nickname,
+        userRole: userRole || 'eat',
+        familyGroupName: '',
+        groupInviteCode: '',
+        groupRole: 'member',
+        accountStatus: me.accountStatus || 'active',
+        createdAt: me.createdAt || new Date()
+      });
+    }
+
+    // =========================
+    // 4. 如果有自動補 admin，同步更新該 admin 的 users profile
+    // =========================
+    for (const adminEmail of adminEmails) {
+      const adminUser = users.find(u => u.email === adminEmail);
+
+      if (adminUser) {
+        await db.collection('users').update(adminUser.id, {
+          uid: adminUser.uid || '',
+          email: adminUser.email || '',
+          nickname: adminUser.nickname || '',
+          userRole: adminUser.userRole || 'eat',
+          familyGroupName: currentGroup.groupName || '',
+          groupInviteCode: currentGroup.inviteCode || '',
+          groupRole: 'admin',
+          accountStatus: adminUser.accountStatus || 'active',
+          createdAt: adminUser.createdAt || new Date()
+        });
+      }
+    }
+
+    // =========================
+    // 5. 清空本機 state
+    // =========================
+    setFamilyGroupName('');
+    setGroupInviteCode('');
+    setGroupRole('member');
+    setGroupAdminEmails([]);
+    setInputInviteCode('');
+    setGroupMembers([]);
+    setAppStage('group_setup');
+    setCurrentTab('home');
+
+    showMessage('你已離開目前群組。');
+  } catch (error) {
+    console.log('handleLeaveCurrentGroup error:', error);
+    showMessage('離開群組失敗', error.message || String(error));
+  }
+};
+
+// 用途：登出帳號，只清除本機登入狀態，不刪除 Firebase 資料
+const handleLogout = async () => {
+  await clearLoginSessionFromDevice();
+  clearAuthToken();
+
+  setEmail('');
+  setPassword('');
+  setConfirmPassword('');
+  setNickname('');
+  setInputInviteCode('');
+  setUserRole('eat');
+  setFamilyGroupName('');
+setGroupInviteCode('');
+setGroupRole('member');
+
+setIsEditingProfile(false);
+setCurrentTab('home');
+setAppStage('login');
+setDynamicCategories(INITIAL_TAG_CATEGORIES);
+  
+};
+
+
+// 用途：刪除帳號前重新輸入密碼確認
+const [deleteAccountModalVisible, setDeleteAccountModalVisible] = useState(false);
+const [deleteAccountPasswordInput, setDeleteAccountPasswordInput] = useState('');
+const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+
+// 用途：在刪除帳號 Modal 裡按「確認刪除」後執行
+// 先重新驗證密碼，再真正刪除帳號
+const handleConfirmDeleteMyAccount = async () => {
+  try {
+    if (isDeletingAccount) return;
+
+    if (!deleteAccountPasswordInput.trim()) {
+      return showMessage('請輸入帳號密碼，確認刪除帳號。');
+    }
+
+    setIsDeletingAccount(true);
+
+    // 先重新驗證身份，成功後 Firebase 才允許刪帳號
+    await reauthenticateCurrentUser(email, deleteAccountPasswordInput.trim());
+
+    // 重新驗證成功後，再執行原本的刪帳流程
+    await handleDeleteMyAccount(true);
+
+    setDeleteAccountModalVisible(false);
+    setDeleteAccountPasswordInput('');
+    setIsDeletingAccount(false);
+  } catch (error) {
+    console.log('handleConfirmDeleteMyAccount error:', error);
+
+    setIsDeletingAccount(false);
+
+    const message = String(error?.message || error);
+
+    if (
+      message.includes('CREDENTIAL_TOO_OLD_LOGIN_AGAIN') ||
+      message.includes('requires-recent-login') ||
+      message.includes('auth/requires-recent-login')
+    ) {
+      return showMessage(
+        '為了保障帳號安全，請重新輸入密碼。'
+      );
+    }
+
+    if (
+      message.includes('INVALID_PASSWORD') ||
+      message.includes('wrong-password') ||
+      message.includes('auth/wrong-password') ||
+      message.includes('INVALID_LOGIN_CREDENTIALS')
+    ) {
+      return showMessage('密碼錯誤', '你輸入的密碼不正確，請再試一次。');
+    }
+
+    showMessage('刪除帳號失敗', error.message || String(error));
+  }
+};
+// 用途：刪除帳號，並處理群組 membership、admin 權限、菜式匿名化
+// alreadyReauthenticated = true 代表已經重新輸入密碼驗證，可以正式刪除
+const handleDeleteMyAccount = async (alreadyReauthenticated = false) => {
+  try {
+    // 用途：避免 React Native onPress 傳入 event object，被誤判成 true
+    const hasReauthenticated = alreadyReauthenticated === true;
+
+    // 第一次按刪除帳號時，不直接刪，先打開密碼確認 Modal
+    if (!hasReauthenticated) {
+      setDeleteAccountPasswordInput('');
+      setDeleteAccountModalVisible(true);
+      return;
+    }
+
+    const users = await db.collection('users').getAll();
+    const me = users.find(u => u.email === email);
+
+    const groups = await db.collection('familyGroups').getAll();
+    const currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+    // =========================
+    // 1. 若有群組，先移除 membership 及 admin 身份
+    // =========================
+    if (currentGroup) {
+      const oldMemberEmails = Array.isArray(currentGroup.memberEmails)
+        ? currentGroup.memberEmails
+        : [];
+
+      const oldMemberNames = Array.isArray(currentGroup.memberNames)
+        ? currentGroup.memberNames
+        : [];
+
+      const removeIndex = oldMemberEmails.findIndex(e => e === email);
+
+      const memberEmails = oldMemberEmails.filter(e => e !== email);
+
+      const memberNames =
+        removeIndex >= 0
+          ? oldMemberNames.filter((_, index) => index !== removeIndex)
+          : oldMemberNames.filter(n => n !== nickname);
+
+      let adminEmails = Array.isArray(currentGroup.adminEmails)
+        ? currentGroup.adminEmails.filter(e => e !== email)
+        : [];
+
+      // 如果自己刪帳後群組仍有人，但沒有 admin，就按加入順序補第一位做 admin
+      if (adminEmails.length === 0 && memberEmails.length > 0) {
+        adminEmails = [memberEmails[0]];
+      }
+
+      // 如果自己離開後，群組已經沒有任何成員，先提醒再刪除群組
+if (memberEmails.length === 0) {
+  const confirmed = await confirmLastMemberLeaveGroup();
+
+  if (!confirmed) {
+    return;
+  }
+
+  await db.collection('familyGroups').delete(currentGroup.id);
+} else {
+  await db.collection('familyGroups').update(currentGroup.id, {
+    groupName: currentGroup.groupName || '',
+    inviteCode: currentGroup.inviteCode || '',
+    createdByEmail: currentGroup.createdByEmail || '',
+    createdByNickname: currentGroup.createdByNickname || '',
+
+    // ownerEmail 只作建立者紀錄，不再影響權限
+    ownerEmail: currentGroup.ownerEmail || '',
+
+    // 真正權限來源
+    adminEmails: adminEmails,
+
+    memberNames: memberNames,
+    memberEmails: memberEmails,
+    createdAt: currentGroup.createdAt || new Date()
+  });
+}
+
+      // 如果自動補了 admin，同步更新該 admin 的 users profile
+      for (const adminEmail of adminEmails) {
+        const adminUser = users.find(u => u.email === adminEmail);
+
+        if (adminUser) {
+          await db.collection('users').update(adminUser.id, {
+            uid: adminUser.uid || '',
+            email: adminUser.email || '',
+            nickname: adminUser.nickname || '',
+            userRole: adminUser.userRole || 'eat',
+            familyGroupName: currentGroup.groupName || '',
+            groupInviteCode: currentGroup.inviteCode || '',
+            groupRole: 'admin',
+            accountStatus: adminUser.accountStatus || 'active',
+            createdAt: adminUser.createdAt || new Date()
+          });
+        }
+      }
+    }
+
+    // =========================
+    // 2. 處理 dishes
+    // =========================
+    const allDishes = await db.collection('dishes').getAll();
+    const safeDishes = Array.isArray(allDishes) ? allDishes : [];
+    const myDishes = safeDishes.filter(d => d.createdByEmail === email);
+
+    for (const dish of myDishes) {
+      const status = String(
+        dish.publishStatus ?? (dish.isPublic ? 'approved' : 'private')
+      ).trim().toLowerCase();
+
+      // pending 菜：直接刪除
+      if (status === 'pending') {
+        await db.collection('dishes').delete(dish.id);
+      } else {
+        // private / approved：保留，但匿名化
+        await db.collection('dishes').update(dish.id, {
+          name: dish.name || '',
+          ingredients: dish.ingredients || '',
+          tags: dish.tags || [],
+          createdByEmail: '',
+          createdByNickname: '已刪除用戶',
+          createdByDeleted: true,
+          familyGroupName: dish.familyGroupName || '',
+          groupCode: dish.groupCode || '',
+          isPublic: dish.isPublic || false,
+          requestedPublic: dish.requestedPublic || false,
+          publishStatus: dish.publishStatus || (dish.isPublic ? 'approved' : 'private'),
+
+          // 保留群組隱藏紀錄
+          hiddenForGroups: Array.isArray(dish.hiddenForGroups) ? dish.hiddenForGroups : [],
+
+          createdAt: dish.createdAt || new Date()
+        });
+      }
+    }
+
+    // =========================
+    // 3. soft delete user profile
+    // =========================
+    if (me) {
+      await db.collection('users').update(me.id, {
+        uid: me.uid || '',
+        email: email,
+        nickname: nickname,
+        userRole: userRole || 'eat',
+        familyGroupName: '',
+        groupInviteCode: '',
+        groupRole: 'member',
+        accountStatus: 'deleted',
+        deletedAt: new Date(),
+        createdAt: me.createdAt || new Date()
+      });
+    }
+
+    // =========================
+    // 4. 刪 Firebase Auth 帳號
+    // =========================
+    await deleteCurrentAccount();
+
+    // =========================
+    // 5. 清本機 state
+    // =========================
+  await clearLoginSessionFromDevice();
+
+    clearAuthToken();
+
+    setEmail('');
+    setPassword('');
+    setConfirmPassword('');
+    setNickname('');
+    setInputInviteCode('');
+    setGroupInviteCode('');
+    setUserRole('eat');
+    setFamilyGroupName('');
+    setGroupRole('member');
+    setGroupAdminEmails([]);
+    setGroupMembers([]);
+
+    setIsEditingProfile(false);
+    setIsDishEditMode(false);
+    setDishEditSearchQuery('');
+
+    setAppStage('login');
+    setCurrentTab('home');
+
+    showMessage('你的帳戶已被刪除');
+  } catch (error) {
+    console.log('handleDeleteMyAccount error:', error);
+    showMessage('刪除帳號失敗', error.message || String(error));
+  }
+};
+
+// 用途：儲存個人資料、角色及群組名稱到 Firebase
+const handleSaveProfile = async () => {
+  try {
+    const newNickname = editNickname.trim();
+    const newRole = editRole || 'eat';
+    const newGroupName = editGroupName.trim();
+
+    console.log('準備儲存 profile');
+    console.log('newNickname:', newNickname);
+    console.log('newRole:', newRole);
+    console.log('newGroupName:', newGroupName);
+
+    if (!newNickname) {
+      return showMessage('暱稱不能留空。');
+    }
+
+    if (!newGroupName) {
+      return showMessage('群組名稱不能留空。');
+    }
+
+    // 1. 找回自己的 user profile
+    const users = await db.collection('users').getAll();
+    const me = users.find(u => u.email === email);
+
+    if (!me) {
+      return showMessage('電郵未有登記，請重新登入。');
+    }
+
+    let currentGroup = null;
+    let currentAdminEmails = Array.isArray(groupAdminEmails) ? groupAdminEmails : [];
+    let finalGroupRole = currentAdminEmails.includes(email) ? 'admin' : 'member';
+
+    // 2. 如果有群組，更新 familyGroups 裡面的 groupName 及 memberNames
+    if (groupInviteCode) {
+      const groups = await db.collection('familyGroups').getAll();
+      currentGroup = groups.find(g => g.inviteCode === groupInviteCode);
+
+      if (!currentGroup) {
+        return showMessage('沒有此群組，請重新登入。');
+      }
+
+      const oldMemberEmails = Array.isArray(currentGroup.memberEmails)
+        ? currentGroup.memberEmails
+        : [];
+
+      const oldMemberNames = Array.isArray(currentGroup.memberNames)
+        ? currentGroup.memberNames
+        : [];
+
+      currentAdminEmails = Array.isArray(currentGroup.adminEmails)
+        ? currentGroup.adminEmails
+        : [];
+
+      finalGroupRole = currentAdminEmails.includes(email) ? 'admin' : 'member';
+
+      // 用 email 的位置來更新 memberNames，避免同名成員被錯改
+      const myIndex = oldMemberEmails.findIndex(e => e === email);
+
+      let updatedMemberNames = [...oldMemberNames];
+
+      if (myIndex >= 0) {
+        updatedMemberNames[myIndex] = newNickname;
+      } else if (!updatedMemberNames.includes(newNickname)) {
+        updatedMemberNames.push(newNickname);
+      }
+
+      await db.collection('familyGroups').update(currentGroup.id, {
+        groupName: newGroupName,
+        inviteCode: currentGroup.inviteCode || '',
+        createdByEmail: currentGroup.createdByEmail || '',
+        createdByNickname: currentGroup.createdByNickname || '',
+
+        // ownerEmail 只作建立者紀錄，不再影響權限
+        ownerEmail: currentGroup.ownerEmail || '',
+
+        // 真正權限來源
+        adminEmails: currentAdminEmails,
+
+        memberNames: updatedMemberNames,
+        memberEmails: oldMemberEmails,
+        createdAt: currentGroup.createdAt || new Date()
+      });
+    }
+
+    // 3. 更新自己 users profile
+    await db.collection('users').update(me.id, {
+      uid: me.uid || '',
+      email: email,
+      nickname: newNickname,
+
+      // 重要：這裡一定要用 newRole
+      userRole: newRole,
+
+      familyGroupName: groupInviteCode ? newGroupName : '',
+      groupInviteCode: groupInviteCode || '',
+
+      // groupRole 只用 admin / member，不再用 owner
+      groupRole: finalGroupRole,
+
+      accountStatus: me.accountStatus || 'active',
+      createdAt: me.createdAt || new Date()
+    });
+
+    // 4. 同步更新同一群組其他成員 users 入面的 familyGroupName 及 groupRole
+    if (groupInviteCode) {
+      const sameGroupUsers = users.filter(u =>
+        u.groupInviteCode === groupInviteCode && u.email !== email
+      );
+
+      for (const member of sameGroupUsers) {
+        const memberGroupRole = currentAdminEmails.includes(member.email)
+          ? 'admin'
+          : 'member';
+
+        await db.collection('users').update(member.id, {
+          uid: member.uid || '',
+          email: member.email || '',
+          nickname: member.nickname || '',
+          userRole: member.userRole || 'eat',
+          familyGroupName: newGroupName,
+          groupInviteCode: member.groupInviteCode || '',
+
+          // 同群組其他人也只用 admin / member
+          groupRole: memberGroupRole,
+
+          accountStatus: member.accountStatus || 'active',
+          createdAt: member.createdAt || new Date()
+        });
+      }
+    }
+
+    // 5. 更新本機畫面 state
+    setNickname(newNickname);
+    setUserRole(newRole);
+    setFamilyGroupName(groupInviteCode ? newGroupName : '');
+    setGroupRole(finalGroupRole);
+    setGroupAdminEmails(currentAdminEmails);
+
+    setEditNickname(newNickname);
+    setEditRole(newRole);
+    setEditGroupName(newGroupName);
+
+    setIsEditingProfile(false);
+
+  } catch (error) {
+    console.log('handleSaveProfile error:', error);
+    showMessage('更新失敗', error.message || String(error));
+  }
+};
+
+//即時update
+useEffect(() => {
+  const checkForUpdates = async () => {
+    try {
+      if (__DEV__) return;
+
+      const update = await Updates.checkForUpdateAsync();
+
+      if (update.isAvailable) {
+        await Updates.fetchUpdateAsync();
+        await Updates.reloadAsync();
+      }
+    } catch (error) {
+      console.log('checkForUpdates error:', error);
+    }
+  };
+
+  checkForUpdates();
+}, []);
+
+// 常見食材與分類庫
+const INITIAL_TAG_CATEGORIES = {
+  ingredients: {
+    title: '🥩 食物種類',
+    isNested: true,
+    subCategories: {
+      meat: { title: '🍖 肉類與蛋類', tags: ['🐷 豬肉', '🥩 牛肉', '🐔 雞肉', '🐑 羊肉', '🦆 鴨肉', '🥚 蛋類'] },
+      vegie: { title: '🥬 蔬菜與豆品', tags: ['🥬 葉菜', '🥕 根莖', '🍄 菇菌', '🫘 豆類', '🧀 豆腐', '🌽 瓜果', '🌽 栗米'] },
+      seafood: { title: '🐟 海鮮類', tags: ['🐟 魚', '🦐 蝦', '🦀 蟹', '🦪 貝', '🦑 魷魚'] },
+      staple: { title: '🍚 主食與麵點', tags: ['🍚 白飯', '🍜 麵條', '🥟 水餃', '🍞 麵包', '🍞 吐司'] }
+    }
+  },
+  cuisine: { title: '🌐 菜式地區', tags: ['🇨🇳 中式', '🇭🇰 港式', '🇯🇵 日式', '🇰🇷 韓式', '🇹🇭 泰式', '🇮🇹 西式','🇹🇼 台式'] },
+  method: { title: '🍳 烹調方式', tags: ['🔥 煎炒', '💨 蒸煮', '♨️ 蒸餸', '🥘 燜燉', '🍗 酥炸', '🥗 涼拌', '🔥 烘烤', '💨 氣炸', '🍲 火鍋', '🍲 湯底', '🔥 鑊氣', '🍲 煲仔飯'] },
+  flavour: { title: '😋 味道', tags: ['🍯 酸甜', '🍬 甜', '🍛 咖喱', '🌶️ 辣味', '🧂 清淡'] },
+  lifestyle: { title: '🍽️ 菜式類型', tags: ['🍰 甜品', '🥟 點心', '⏱️ 快手菜', '🏠 家常菜', '🥤 茶餐廳', '🍢 大牌檔', '🧓 老火湯', '🥗 低卡減脂', '🌱 純素', '🌱 蔬食'] }
+};
+
+
+const INITIAL_DISHES = [
+  { id: '1', name: '番茄炒蛋', tags: ['🥬 葉菜', '🥚 蛋類', '🇭🇰 港式', '⏱️ 快手菜'], ingredients: '番茄、雞蛋', isPublic: true, groupCode: '' }]
+
+const FRUIT_SEASONS = ['全年', '春', '夏', '秋', '冬'];
+
+const INITIAL_FRUITS = [
+  { id: 'fruit_apple', name: '蘋果', seasons: ['全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_banana', name: '香蕉', seasons: ['全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_orange', name: '橙', seasons: ['全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_kiwi', name: '奇異果', seasons: ['全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_avocado', name: '牛油果', seasons: ['全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+
+  { id: 'fruit_strawberry', name: '士多啤梨', seasons: ['冬', '春'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_grapefruit', name: '西柚', seasons: ['冬', '春'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_blueberry', name: '藍莓', seasons: ['春', '夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_dragonfruit', name: '火龍果', seasons: ['春', '夏', '秋'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+
+  { id: 'fruit_mango', name: '芒果', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_watermelon', name: '西瓜', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_melon', name: '蜜瓜', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_hami_melon', name: '哈密瓜', seasons: ['夏', '秋'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_lychee', name: '荔枝', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_longan', name: '龍眼', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_durian', name: '榴槤', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_mangosteen', name: '山竹', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_pineapple', name: '菠蘿', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_peach', name: '水蜜桃', seasons: ['夏'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+
+  { id: 'fruit_pear', name: '梨', seasons: ['秋'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_persimmon', name: '柿', seasons: ['秋'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_pomelo', name: '柚子', seasons: ['秋', '冬'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_guava', name: '番石榴', seasons: ['秋'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_cherry', name: '車厘子', seasons: ['冬'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] },
+  { id: 'fruit_grape', name: '提子', seasons: ['冬', '全年'], isPublic: true, publishStatus: 'approved', groupCode: '', hiddenForGroups: [] }
+];
+
+//月曆
+const formatDateToString = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+const normalizeDateString = (dateStr) => {
+  if (!dateStr || typeof dateStr !== 'string') {
+    return '';
+  }
+
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+
+  const y = parts[0];
+  const m = String(parts[1]).padStart(2, '0');
+  const d = String(parts[2]).padStart(2, '0');
+
+  return `${y}-${m}-${d}`;
+};
+
+const isPastDate = (dateStr) => {
+  const normalized = normalizeDateString(dateStr);
+  const today = formatDateToString(CURRENT_DATE);
+  return normalized < today;
+};
+// 用途：取得目前水果優先季節
+// 注意：這裡用可調整 mapping，不代表香港四季硬性定義
+const getCurrentFruitPrioritySeason = () => {
+  const month = CURRENT_DATE.getMonth() + 1;
+
+  const monthToFruitSeason = {
+    1: '冬',
+    2: '春',
+    3: '春',
+    4: '春',
+    5: '夏',
+    6: '夏',
+    7: '夏',
+    8: '秋',
+    9: '秋',
+    10: '秋',
+    11: '冬',
+    12: '冬'
+  };
+
+  return monthToFruitSeason[month] || '全年';
+};
+
+// 用途：水果季節標籤排序
+// 全年永遠第一，其餘由目前優先季節開始輪轉
+const getSortedFruitSeasons = () => {
+  const baseOrder = ['春', '夏', '秋', '冬'];
+  const current = getCurrentFruitPrioritySeason();
+
+  if (!baseOrder.includes(current)) {
+    return ['全年', ...baseOrder];
+  }
+
+  const startIndex = baseOrder.indexOf(current);
+
+  return [
+    '全年',
+    ...baseOrder.slice(startIndex),
+    ...baseOrder.slice(0, startIndex)
+  ];
+};
+const getFruitEmoji = (fruitName) => {
+  const name = String(fruitName || '');
+
+  if (name.includes('蘋果')) return '🍎';
+  if (name.includes('香蕉')) return '🍌';
+  if (name.includes('橙') || name.includes('柑') || name.includes('橘')) return '🍊';
+  if (name.includes('檸檬')) return '🍋';
+  if (name.includes('西瓜')) return '🍉';
+  if (name.includes('提子') || name.includes('葡萄')) return '🍇';
+  if (name.includes('士多啤梨') || name.includes('草莓')) return '🍓';
+  if (name.includes('藍莓')) return '🫐';
+  if (name.includes('車厘子') || name.includes('櫻桃')) return '🍒';
+  if (name.includes('桃')) return '🍑';
+  if (name.includes('芒果')) return '🥭';
+  if (name.includes('菠蘿') || name.includes('鳳梨')) return '🍍';
+  if (name.includes('奇異果')) return '🥝';
+  if (name.includes('牛油果')) return '🥑';
+  if (name.includes('梨')) return '🍐';
+  if (name.includes('椰')) return '🥥';
+  if (name.includes('龍眼') || name.includes('荔枝') || name.includes('山竹') || name.includes('榴槤')) return '🥭';
+
+  return '🍈';
+};
+//
+const showMessage = (title, message = '') => {
+  if (Platform.OS === 'web') {
+    alert(message ? `${title}\n${message}` : title);
+
+  } else {
+    Alert.alert(title, message);
+  }
+};
+//彈月曆
+const [calendarVisible, setCalendarVisible] = useState(false);
+
+// 用途：有按鈕選項的提示訊息
+const showConfirmMessage = (title, message, buttons = []) => {
+  if (Platform.OS === 'web') {
+    const confirmed = window.confirm(`${title}\n${message}`);
+
+    if (confirmed) {
+      const confirmButton = buttons.find(btn => btn.text !== '先不用' && btn.style !== 'cancel');
+      if (confirmButton && typeof confirmButton.onPress === 'function') {
+        confirmButton.onPress();
+      }
+    }
+
+    return;
+  }
+
+  Alert.alert(title, message, buttons);
+};
+
+ 
+
+  // 控制首頁大分類標籤摺疊狀態
+  const [expandedCategories, setExpandedCategories] = useState({
+    ingredients: false, cuisine: false, method: false, flavour: false, lifestyle: false,
+  });
+
+
+  const toggleCategoryExpand = (key) => {
+    setExpandedCategories(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+
+
+// request response
+const getStatusLabel = (status) => {
+  switch (status) {
+    case 'approved': return '✅ 已同意';
+    case 'rejected': return '❌ 已拒絕';
+    case 'pending': return '⏳ 等待回應';
+    case 'completed': return '✅ 已完成';
+    default: return '❓ 未知';
+  }
+};
+
+  // ========================================================
+  // ✨ ✨ 這裡開始是全新優化的管理標籤狀態與邏輯 ✨ ✨
+  // ========================================================
+  const [dynamicCategories, setDynamicCategories] = useState(INITIAL_TAG_CATEGORIES);
+  const [dishes, setDishes] = useState(INITIAL_DISHES);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTags, setSelectedTags] = useState([]);
+ 
+
+ 
+  const [currentYear, setCurrentYear] = useState(CURRENT_DATE.getFullYear());
+  const [currentMonth, setCurrentMonth] = useState(CURRENT_DATE.getMonth() + 1);
+
+
+  const [requestModalVisible, setRequestModalVisible] = useState(false);
+  const [selectedDish, setSelectedDish] = useState(null);
+
+
+// =====================
+// 水果專頁 State
+// =====================
+const [homeSubPage, setHomeSubPage] = useState('dishes'); // dishes / fruits
+
+const [fruits, setFruits] = useState(INITIAL_FRUITS);
+const [fruitSearchQuery, setFruitSearchQuery] = useState('');
+const [selectedFruitSeasons, setSelectedFruitSeasons] = useState([]);
+
+const [isFruitEditMode, setIsFruitEditMode] = useState(false);
+const [selectedFruitIdsForHide, setSelectedFruitIdsForHide] = useState([]);
+const [hiddenFruitsModalVisible, setHiddenFruitsModalVisible] = useState(false);
+
+const [fruitRequestModalVisible, setFruitRequestModalVisible] = useState(false);
+const [selectedFruit, setSelectedFruit] = useState(null);
+
+const [fruitTargetName, setFruitTargetName] = useState('');
+const [fruitTargetEmail, setFruitTargetEmail] = useState('');
+const [fruitTargetDropdownOpen, setFruitTargetDropdownOpen] = useState(false);
+
+const [fruitAutoAddToList, setFruitAutoAddToList] = useState(null);
+const [lastFruitTargetEmail, setLastFruitTargetEmail] = useState('');
+const [lastFruitTargetName, setLastFruitTargetName] = useState('');
+
+const [newFruitName, setNewFruitName] = useState('');
+const [newFruitSeasons, setNewFruitSeasons] = useState([]);
+const [newFruitIsPublic, setNewFruitIsPublic] = useState(false);
+
+
+  // 半分頁專用 State
+  const [customModalVisible, setCustomModalVisible] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [newModalTagName, setNewModalTagName] = useState('');
+  const [selectedModalCat, setSelectedModalCat] = useState('none');
+  const [selectedSubModalCat, setSelectedSubModalCat] = useState('');
+  const [showMoreModalCats, setShowMoreModalCats] = useState(false);
+  const [isEditingCustomTags, setIsEditingCustomTags] = useState(false);
+  const [selectedCustomTagNames, setSelectedCustomTagNames] = useState([]);
+  const [selectedCustomCategoryKeys, setSelectedCustomCategoryKeys] = useState([]);
+
+// 用途：控制「已隱藏菜式管理」Modal
+const [hiddenDishesModalVisible, setHiddenDishesModalVisible] = useState(false);
+
+// 用途：每次打開管理標籤分頁時，編輯區都先收起，並清空已勾選項目
+useEffect(() => {
+  if (customModalVisible) {
+    setIsEditingCustomTags(false);
+    setSelectedCustomTagNames([]);
+    setSelectedCustomCategoryKeys([]);
+  }
+}, [customModalVisible]);
+
+  // 下拉選單控制狀態
+  const [cookDropdownOpen, setCookDropdownOpen] = useState(false);
+  const [mealDropdownOpen, setMealDropdownOpen] = useState(false);
+  // 用途：所有可選餐次，點菜和改期都可共用
+const MEAL_OPTIONS = ['早餐', '午餐','下午茶', '晚餐',  '宵夜'];
+ 
+const [targetCook, setTargetCook] = useState('');
+const [targetCookEmail, setTargetCookEmail] = useState('');
+
+// 用途：提出想吃時選擇餐次
+// 不再硬性預設晚餐；如果之前選過，就沿用上一次
+const [selectedMeal, setSelectedMeal] = useState('');
+const [lastSelectedMeal, setLastSelectedMeal] = useState('');
+
+const saveLastSelectionsToDevice = async (data) => {
+  try {
+    await AsyncStorage.setItem(
+      LAST_SELECTION_KEY,
+      JSON.stringify(data)
+    );
+  } catch (error) {
+    console.log('saveLastSelections error:', error);
+  }
+};
+
+const loadLastSelectionsFromDevice = async () => {
+  try {
+    const text = await AsyncStorage.getItem(LAST_SELECTION_KEY);
+
+    if (!text) return;
+
+    const data = JSON.parse(text);
+
+    setLastSelectedMeal(data?.meal || '');
+    setLastAutoAddToList(data?.autoAdd || null);
+    setLastApproveAddToList(data?.approveAdd || null);
+  } catch (error) {
+    console.log('loadLastSelections error:', error);
+  }
+};
+
+useEffect(() => {
+  loadLastSelectionsFromDevice();
+}, []);
+
+
+// 用途：提出想吃時是否加入自己的購物清單
+// null = 尚未選擇，true = 加入，false = 不加入
+const [autoAddToList, setAutoAddToList] = useState(null);
+const [lastAutoAddToList, setLastAutoAddToList] = useState(null);
+
+const [customDateInput, setCustomDateInput] = useState(formatDateToString(CURRENT_DATE));
+
+// 用途：大廚同意 request 時，是否把材料加入購物清單
+// null = 尚未選擇，true = 加入，false = 不加入
+const [approveAddToList, setApproveAddToList] = useState(null);
+const [lastApproveAddToList, setLastApproveAddToList] = useState(null);
+
+// 用途：大廚拒絕 / 取消 request 時填寫原因，可空白
+const [rejectModalVisible, setRejectModalVisible] = useState(false);
+const [rejectTargetRequest, set
