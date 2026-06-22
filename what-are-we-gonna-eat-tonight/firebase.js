@@ -1,17 +1,31 @@
 const PROJECT_ID = "what-are-we-gonna-eat-tonight";
 const API_KEY = "AIzaSyB9XQYfYrXAISiRtQIXbb6vOEjIHzRt2rg";
 
-// ✅ 用來暫存登入後的 Firebase idToken
+// ✅ 用來暫存登入後的 Firebase idToken / refreshToken
 let authToken = '';
+let authRefreshToken = '';
+let authTokenExpiresAt = 0;
 
-export const setAuthToken = (token) => {
-  authToken = token;
+// ✅ 設定目前登入 session
+// expiresIn 通常是 3600 秒；這裡會提早 5 分鐘當作過期，避免 request 時剛好失效
+export const setAuthToken = (token, refreshToken = '', expiresIn = 3600) => {
+  authToken = token || '';
+
+  if (refreshToken) {
+    authRefreshToken = refreshToken;
+  }
+
+  const expiresInSeconds = Number(expiresIn || 3600);
+  authTokenExpiresAt = Date.now() + Math.max(expiresInSeconds - 300, 60) * 1000;
 };
 
 // ✅ 清除登入 token
 export const clearAuthToken = () => {
   authToken = '';
+  authRefreshToken = '';
+  authTokenExpiresAt = 0;
 };
+
 
 // 封裝註冊功能
 export const registerWithEmail = async (email, password) => {
@@ -81,7 +95,7 @@ export const deleteCurrentAccount = async () => {
 };
 // 用途：用 refreshToken 重新取得新的 idToken，讓同一手機可以保持登入
 export const refreshAuthToken = async (refreshToken) => {
-  const safeRefreshToken = String(refreshToken || '').trim();
+  const safeRefreshToken = String(refreshToken || authRefreshToken || '').trim();
 
   if (!safeRefreshToken) {
     throw new Error('沒有 refresh token，請重新登入。');
@@ -105,15 +119,43 @@ export const refreshAuthToken = async (refreshToken) => {
   }
 
   // securetoken endpoint 回傳是 snake_case
-  authToken = data.id_token;
+  const nextIdToken = data.id_token || '';
+  const nextRefreshToken = data.refresh_token || safeRefreshToken;
+  const expiresInSeconds = Number(data.expires_in || 3600);
+
+  authToken = nextIdToken;
+  authRefreshToken = nextRefreshToken;
+  authTokenExpiresAt = Date.now() + Math.max(expiresInSeconds - 300, 60) * 1000;
 
   return {
-    idToken: data.id_token || data.idToken || '',
-    refreshToken: data.refresh_token || data.refreshToken || '',
-    userId: data.user_id || data.localId || '',
-    expiresIn: data.expires_in
+    idToken: nextIdToken,
+    refreshToken: nextRefreshToken,
+    userId: data.user_id || '',
+    expiresIn: expiresInSeconds
   };
-};  
+};
+
+// 用途：Firestore request 前確認 idToken 仍然有效；如果過期就自動 refresh
+const ensureFreshAuthToken = async () => {
+  if (!authToken) {
+    return '';
+  }
+
+  // token 未過期，直接用現有 token
+  if (authTokenExpiresAt && Date.now() < authTokenExpiresAt) {
+    return authToken;
+  }
+
+  // token 過期，但有 refreshToken，就自動換新 idToken
+  if (authRefreshToken) {
+    const refreshedUser = await refreshAuthToken(authRefreshToken);
+    return refreshedUser.idToken;
+  }
+
+  // 沒有 refreshToken，只能回傳現有 token；之後 request 可能會失敗
+  return authToken;
+};
+
 // 用途：刪除帳號 / 改密碼等敏感操作前，重新登入取得新的 idToken
 export const reauthenticateCurrentUser = async (email, password) => {
   const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${API_KEY}`;
@@ -136,11 +178,11 @@ export const reauthenticateCurrentUser = async (email, password) => {
     throw new Error(data?.error?.message || '重新驗證失敗');
   }
 
-  // 重要：更新目前使用中的 token
-  // deleteCurrentAccount() 之後會用這個最新 token 去刪帳號
-  authToken = data.idToken;
+// 重要：更新目前使用中的 token
+// deleteCurrentAccount() 之後會用這個最新 token 去刪帳號
+setAuthToken(data.idToken, data.refreshToken, data.expiresIn);
 
-  return data;
+return data;
 };
 
 // ✅ Firestore 回傳值解析
@@ -236,19 +278,23 @@ const formatFirestoreFields = (data) => {
 };
 
 // ✅ 取得 Firestore request headers
-const getFirestoreHeaders = (includeContentType = false) => {
+// 重要：每次 Firestore request 前都先確認 token 未過期
+const getFirestoreHeaders = async (includeContentType = false) => {
   const headers = {};
 
   if (includeContentType) {
     headers['Content-Type'] = 'application/json';
   }
 
-  if (authToken) {
-    headers.Authorization = `Bearer ${authToken}`;
+  const freshToken = await ensureFreshAuthToken();
+
+  if (freshToken) {
+    headers.Authorization = `Bearer ${freshToken}`;
   }
 
   return headers;
 };
+
 
 // ✅ Firestore document parser
 const parseFirestoreDocument = (doc) => {
@@ -276,7 +322,7 @@ export const db = {
 
         const response = await fetch(url, {
           method: 'PATCH',
-          headers: getFirestoreHeaders(true),
+          headers: await getFirestoreHeaders(true),
           body: JSON.stringify({
             fields: formattedFields
           })
@@ -307,7 +353,7 @@ export const db = {
 
         const response = await fetch(url, {
           method: 'DELETE',
-          headers: getFirestoreHeaders(false)
+          headers: await getFirestoreHeaders(false)
         });
 
         if (!response.ok) {
@@ -337,7 +383,7 @@ export const db = {
 
         const response = await fetch(url, {
           method: 'POST',
-          headers: getFirestoreHeaders(true),
+          headers: await getFirestoreHeaders(true),
           body: JSON.stringify({
             fields: formattedFields
           })
@@ -382,7 +428,7 @@ getAll: async () => {
 
       const response = await fetch(url, {
         method: 'GET',
-        headers: getFirestoreHeaders(false)
+        headers: await getFirestoreHeaders(false)
       });
 
       const data = await response.json();
@@ -425,7 +471,7 @@ getAll: async () => {
 
         const response = await fetch(url, {
           method: 'POST',
-          headers: getFirestoreHeaders(true),
+          headers: await getFirestoreHeaders(true),
           body: JSON.stringify({
             structuredQuery: {
               from: [

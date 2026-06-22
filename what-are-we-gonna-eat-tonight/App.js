@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { StatusBar, StyleSheet, Text, View, ScrollView, TouchableOpacity, TextInput, Modal, Button, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
-import { db, registerWithEmail, loginWithEmail, setAuthToken, clearAuthToken, deleteCurrentAccount, reauthenticateCurrentUser} from './firebase';
+import {  db,  registerWithEmail,  loginWithEmail,  setAuthToken,  clearAuthToken,  deleteCurrentAccount,  reauthenticateCurrentUser,  refreshAuthToken} from './firebase';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Calendar } from 'react-native-calendars';
@@ -63,7 +63,19 @@ const [selectedDishIdsForHide, setSelectedDishIdsForHide] = useState([]);
 // 用途：把登入資料存在手機，之後開 App 可以自動登入
 const saveLoginSessionToDevice = async (user, loginEmail) => {
   try {
-    if (!user?.idToken || !user?.localId) {
+    const savedEmail = String(loginEmail || '').trim().toLowerCase();
+
+    const idToken = user?.idToken || user?.id_token || '';
+    const refreshToken = user?.refreshToken || user?.refresh_token || '';
+    const localId = user?.localId || user?.userId || user?.user_id || '';
+
+    // Firebase Auth 通常回傳 expiresIn: "3600"
+    const expiresInSeconds = Number(user?.expiresIn || user?.expires_in || 3600);
+
+    // 提早 5 分鐘當作過期，避免剛好 request 時過期
+    const expiresAt = Date.now() + Math.max(expiresInSeconds - 300, 60) * 1000;
+
+    if (!savedEmail || !idToken || !localId || !refreshToken) {
       console.log('saveLoginSessionToDevice skipped: invalid user', user);
       return;
     }
@@ -71,10 +83,11 @@ const saveLoginSessionToDevice = async (user, loginEmail) => {
     await AsyncStorage.setItem(
       SAVED_LOGIN_KEY,
       JSON.stringify({
-        email: String(loginEmail || '').trim().toLowerCase(),
-        idToken: user.idToken,
-        localId: user.localId,
-        refreshToken: user.refreshToken || '',
+        email: savedEmail,
+        idToken,
+        localId,
+        refreshToken,
+        expiresAt,
         savedAt: Date.now()
       })
     );
@@ -145,7 +158,7 @@ if (hasValidGroup) {
   }
 };
 
-// 用途：App 每次打開時，先檢查手機是否已有登入紀錄；有就自動進入 App
+// 用途：App 每次打開時，先檢查手機是否已有登入紀錄；有就用 refreshToken 換新 idToken 再進入 App
 useEffect(() => {
   const restoreLoginSessionFromDevice = async () => {
     try {
@@ -158,30 +171,42 @@ useEffect(() => {
 
       const savedLogin = JSON.parse(savedLoginText);
 
-      if (!savedLogin?.email || !savedLogin?.idToken) {
+      if (!savedLogin?.email || !savedLogin?.refreshToken) {
         await clearLoginSessionFromDevice();
         clearAuthToken();
         setAppStage('login');
         return;
       }
 
- // 嘗試用 refresh token 換新 idToken（建議你寫個 helper）
-const newToken = await refreshIdToken(savedLogin.refreshToken);
+      // 重要：不要長期直接用舊 idToken
+      // App 重新開啟時，先用 refreshToken 換新 idToken
+      const refreshedUser = await refreshAuthToken(savedLogin.refreshToken);
 
-if (!newToken) {
-  await clearLoginSessionFromDevice();
-  clearAuthToken();
-  setAppStage('login');
-  return;
-}
+      if (!refreshedUser?.idToken) {
+        await clearLoginSessionFromDevice();
+        clearAuthToken();
+        setAppStage('login');
+        return;
+      }
 
-setAuthToken(newToken.idToken);
+      const nextSession = {
+        idToken: refreshedUser.idToken,
+        refreshToken: refreshedUser.refreshToken || savedLogin.refreshToken,
+        localId: savedLogin.localId || refreshedUser.userId || '',
+        expiresIn: refreshedUser.expiresIn || 3600
+      };
 
-// ✅ 更新儲存
-await saveLoginSessionToDevice(newToken, savedLogin.email);
+      // 更新 firebase.js 內記憶體 token
+      setAuthToken(
+        nextSession.idToken,
+        nextSession.refreshToken,
+        nextSession.expiresIn
+      );
 
-await loadUserProfileAfterAuth(savedLogin.email);
+      // 更新手機內保存的最新 token
+      await saveLoginSessionToDevice(nextSession, savedLogin.email);
 
+      await loadUserProfileAfterAuth(savedLogin.email);
     } catch (error) {
       console.log('restoreLoginSessionFromDevice error:', error);
 
@@ -220,7 +245,7 @@ if (!user?.idToken || !user?.localId) {
   return showMessage('登入失敗', '無法取得登入資料，請再試一次。');
 }
 
-setAuthToken(user.idToken);
+setAuthToken(user.idToken, user.refreshToken, user.expiresIn);
 
     await saveLoginSessionToDevice(user, loginEmail);
 
@@ -240,25 +265,32 @@ setAuthToken(user.idToken);
 // 用途：註冊 Firebase Auth 帳號，並建立 users profile
 const handleRegister = async () => {
   try {
-    if (!nickname || !email || !password || !confirmPassword) {
+    const registerEmail = email.trim().toLowerCase();
+    const registerPassword = password;
+
+    if (!nickname.trim() || !registerEmail || !registerPassword || !confirmPassword) {
       return showMessage('所有欄位皆為必填。');
     }
 
-    if (password !== confirmPassword) {
+    if (registerPassword !== confirmPassword) {
       return showMessage('兩次輸入的密碼不一致。');
     }
 
- const user = await registerWithEmail(email, password);
+    const user = await registerWithEmail(registerEmail, registerPassword);
 
-// 存 token 給 Firestore 用
-setAuthToken(user.idToken);
+    if (!user?.idToken || !user?.localId) {
+      return showMessage('註冊失敗', '無法取得登入資料，請再試一次。');
+    }
 
-// 存登入紀錄到手機，之後開 App 可以自動登入
-await saveLoginSessionToDevice(user, email);
+    // 存 token 給 Firestore 用
+setAuthToken(user.idToken, user.refreshToken, user.expiresIn);
+
+    // 存登入紀錄到手機，之後開 App 可以自動登入
+    await saveLoginSessionToDevice(user, registerEmail);
 
     await db.collection('users').add({
       uid: user.localId,
-      email: email,
+      email: registerEmail,
       nickname: nickname,
       userRole: userRole || 'eat',
       familyGroupName: '',
