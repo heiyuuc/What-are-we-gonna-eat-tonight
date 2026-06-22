@@ -165,9 +165,23 @@ useEffect(() => {
         return;
       }
 
-      setAuthToken(savedLogin.idToken);
+ // 嘗試用 refresh token 換新 idToken（建議你寫個 helper）
+const newToken = await refreshIdToken(savedLogin.refreshToken);
 
-      await loadUserProfileAfterAuth(savedLogin.email);
+if (!newToken) {
+  await clearLoginSessionFromDevice();
+  clearAuthToken();
+  setAppStage('login');
+  return;
+}
+
+setAuthToken(newToken.idToken);
+
+// ✅ 更新儲存
+await saveLoginSessionToDevice(newToken, savedLogin.email);
+
+await loadUserProfileAfterAuth(savedLogin.email);
+
     } catch (error) {
       console.log('restoreLoginSessionFromDevice error:', error);
 
@@ -268,6 +282,8 @@ await saveLoginSessionToDevice(user, email);
 const [members, setMembers] = useState([
   { id: 'me', name: '吃貨小明 (我自己)', isMe: true, isPrimaryCook: false }
 ]);
+
+
 
 // 用途：控制「修改家庭群組名稱」獨立編輯模式
 const [isEditingGroupName, setIsEditingGroupName] = useState(false);
