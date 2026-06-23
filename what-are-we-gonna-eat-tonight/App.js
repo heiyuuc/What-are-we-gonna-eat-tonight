@@ -162,6 +162,7 @@ if (hasValidGroup) {
   }
 };
 
+
 // 用途：App 每次打開時，先檢查手機是否已有登入紀錄；有就用 refreshToken 換新 idToken 再進入 App
 useEffect(() => {
   const restoreLoginSessionFromDevice = async () => {
@@ -541,15 +542,16 @@ useEffect(() => {
   if (!email || !groupInviteCode) return;
 
   loadGroupMembersFromFirebase();
-}, [appStage, groupInviteCode, email, nickname, userRole]);
+}, [appStage, groupInviteCode, email]);
 
 // 用途：admin 可以指定或取消其他人成為 admin
 // 注意：ownerEmail 只作紀錄，不再自動等於 admin
 const handleToggleAdmin = async (member) => {
   try {
     if (!isCurrentUserAdmin) {
-      return 
-    }
+  return showMessage('只有管理員可以操作。');
+}
+
 
     if (member.isMe) {
       return showMessage('不能更改自己的管理員身份。');
@@ -1746,34 +1748,33 @@ const SPECIAL_NOTICE_TYPES = [
     key: 'bringLunch',
     label: '帶午餐',
     icon: '🍱',
-    fullLabel: '🍱 帶午餐'
+    calendarIcon: '•'
   },
   {
     key: 'noLunch',
     label: '不帶午餐',
     icon: '🚫🍱',
-    fullLabel: '🚫🍱 不帶午餐'
+    calendarIcon: '•'
   },
   {
     key: 'homeDinner',
     label: '回來吃飯',
     icon: '🍚',
-    fullLabel: '🍚 回來吃飯'
+    calendarIcon: '•'
   },
   {
     key: 'noDinner',
-    label: '不回來吃',
+    label: '不回來吃飯',
     icon: '🚫🍚',
-    fullLabel: '🚫🍚 不回來吃'
+    calendarIcon: '•'
   },
   {
     key: 'other',
     label: '其他',
     icon: '📝',
-    fullLabel: '📝 其他'
+    calendarIcon: '•'
   }
 ];
-
 const getSpecialNoticeMeta = (noticeType, otherText = '') => {
   const found = SPECIAL_NOTICE_TYPES.find(item => item.key === noticeType);
 
@@ -1781,8 +1782,9 @@ const getSpecialNoticeMeta = (noticeType, otherText = '') => {
     return {
       key: noticeType || '',
       icon: '🔔',
+      calendarIcon: '•',
       label: otherText || '特別通知',
-      fullLabel: otherText ? `🔔 ${otherText}` : '🔔 特別通知'
+      fullLabel: otherText || '特別通知'
     };
   }
 
@@ -1792,11 +1794,14 @@ const getSpecialNoticeMeta = (noticeType, otherText = '') => {
     return {
       ...found,
       label: text || '其他',
-      fullLabel: text ? `📝 ${text}` : '📝 其他'
+      fullLabel: text || '其他'
     };
   }
 
-  return found;
+  return {
+    ...found,
+    fullLabel: found.label
+  };
 };
 
 const getDateOffsetString = (offsetDays) => {
@@ -1807,6 +1812,131 @@ const getDateOffsetString = (offsetDays) => {
 
 const getTomorrowDateString = () => {
   return getDateOffsetString(1);
+};
+const getNoticeTypesFromItem = (item) => {
+  if (Array.isArray(item?.noticeTypes)) {
+    return item.noticeTypes;
+  }
+
+  if (item?.noticeType) {
+    return [item.noticeType];
+  }
+
+  return [];
+};
+//
+const getSpecialNoticeDisplayText = (notice) => {
+  const types = getNoticeTypesFromItem(notice);
+
+  if (types.length === 0) {
+    return '🔔 特別通知';
+  }
+
+  return types
+    .map(typeKey => {
+      const meta = getSpecialNoticeMeta(
+        typeKey,
+        notice?.otherText
+      );
+
+      return meta.fullLabel;
+    })
+    .join('、');
+};
+
+// 用途：將同一人、同一日的多筆特別通知合併成一筆顯示資料
+const mergeSpecialNotificationsByPersonDate = (items) => {
+  const safeItems = Array.isArray(items) ? items : [];
+  const map = new Map();
+
+  safeItems.forEach(item => {
+    if (!item) return;
+
+    const date = normalizeDateString(item.date || '');
+    const senderKey = item.senderEmail || item.senderNickname || 'unknown';
+
+    const key = `${date}|${senderKey}`;
+
+    const itemTypes = getNoticeTypesFromItem(item);
+    const itemOtherText = String(item.otherText || '').trim();
+
+    if (!map.has(key)) {
+      map.set(key, {
+        ...item,
+
+        // 合併後資料
+        mergedNoticeIds: item.id ? [item.id] : [],
+        mergedOriginalNotices: [item],
+
+        noticeTypes: [],
+        otherTexts: []
+      });
+    }
+
+    const group = map.get(key);
+
+    group.mergedNoticeIds = Array.from(
+      new Set([
+        ...(group.mergedNoticeIds || []),
+        ...(item.id ? [item.id] : [])
+      ])
+    );
+
+    group.mergedOriginalNotices = [
+      ...(Array.isArray(group.mergedOriginalNotices)
+        ? group.mergedOriginalNotices
+        : []),
+      item
+    ];
+
+    itemTypes.forEach(typeKey => {
+      if (!group.noticeTypes.includes(typeKey)) {
+        group.noticeTypes.push(typeKey);
+      }
+    });
+
+    if (itemTypes.includes('other') && itemOtherText) {
+      if (!group.otherTexts.includes(itemOtherText)) {
+        group.otherTexts.push(itemOtherText);
+      }
+    }
+
+    map.set(key, group);
+  });
+
+  return Array.from(map.values());
+};
+
+// 用途：顯示合併後通知文字
+const getMergedSpecialNoticeDisplayText = (noticeGroup) => {
+  const types = Array.isArray(noticeGroup?.noticeTypes)
+    ? noticeGroup.noticeTypes
+    : getNoticeTypesFromItem(noticeGroup);
+
+  const parts = [];
+
+  types.forEach(typeKey => {
+    if (typeKey === 'other') return;
+
+    const meta = getSpecialNoticeMeta(typeKey, '');
+    parts.push(meta.fullLabel);
+  });
+
+  const otherTexts = Array.isArray(noticeGroup?.otherTexts)
+    ? noticeGroup.otherTexts
+    : [];
+
+  otherTexts.forEach(text => {
+    if (text && !parts.includes(text)) {
+      parts.push(text);
+    }
+  });
+
+  if (types.includes('other') && otherTexts.length === 0) {
+    parts.push('其他');
+  }
+
+  return Array.from(new Set(parts)).join('、') || '特別通知';
 };
   // ========================================================
   // ✨ ✨ 這裡開始是全新優化的管理標籤狀態與邏輯 ✨ ✨
@@ -1835,7 +1965,7 @@ const [specialNoticeYear, setSpecialNoticeYear] = useState(CURRENT_DATE.getFullY
 const [specialNoticeMonth, setSpecialNoticeMonth] = useState(CURRENT_DATE.getMonth() + 1);
 
 const [specialNoticeDateInput, setSpecialNoticeDateInput] = useState(formatDateToString(CURRENT_DATE));
-const [specialNoticeType, setSpecialNoticeType] = useState('');
+const [specialNoticeTypes, setSpecialNoticeTypes] = useState([]);
 const [specialNoticeOtherText, setSpecialNoticeOtherText] = useState('');
 const [isSpecialNoticeSubmitting, setIsSpecialNoticeSubmitting] = useState(false);
 
@@ -2006,7 +2136,9 @@ const [lastFruitTargetName, setLastFruitTargetName] = useState('');
 const [newFruitName, setNewFruitName] = useState('');
 const [newFruitSeasons, setNewFruitSeasons] = useState([]);
 const [newFruitIsPublic, setNewFruitIsPublic] = useState(false);
-
+//
+const hasShownInboxRef = useRef(false);
+const [forceOpenInboxKey, setForceOpenInboxKey] = useState(0);
 
   // 半分頁專用 State
   const [customModalVisible, setCustomModalVisible] = useState(false);
@@ -2384,14 +2516,8 @@ const senderNotifications = useMemo(() => {
   });
 }, [uniqueRequests, email, dismissedCookMessageKeys]);
 
-// 用途：如果目前登入者有 pending 點菜要求，打開 App 後自動彈出處理視窗
-// 並沿用大廚上一次「是否加入購物清單」選項
-useEffect(() => {
-  if (appStage === 'main' && incomingRequests.length > 0) {
-    setApproveAddToList(lastApproveAddToList);
-    setRequestInboxVisible(true);
-  }
-}, [appStage, incomingRequests.length, lastApproveAddToList]);
+
+
 // 用途：如果發起人收到大廚通知，自動彈出「大廚通知」視窗
 useEffect(() => {
   if (appStage === 'main' && senderNotifications.length > 0) {
@@ -2402,20 +2528,7 @@ useEffect(() => {
     setSenderNotificationModalVisible(false);
   }
 }, [appStage, senderNotifications.length]);
-const specialNoticeReminderCount = Array.isArray(specialNoticeReminders)
-  ? specialNoticeReminders.length
-  : 0;
 
-// 用途：如果有明日特別通知需要提醒大廚，自動 popup
-useEffect(() => {
-  if (appStage === 'main' && specialNoticeReminderCount > 0) {
-    setSpecialNoticeReminderModalVisible(true);
-  }
-
-  if (specialNoticeReminderCount === 0) {
-    setSpecialNoticeReminderModalVisible(false);
-  }
-}, [appStage, specialNoticeReminderCount]);
 // 用途：排序後的家庭動態 request
 // completed / rejected 不顯示；pending / approved 顯示
 // fruit pending 也要顯示，讓發起人和全群組看到「等待回應」
@@ -2590,47 +2703,6 @@ const activeSpecialNotifications = useMemo(() => {
   );
 }, [specialNotifications]);
 
-// 用途：overview 下方列表，只顯示今日及未來的 active 通知
-const sortedUpcomingSpecialNotifications = useMemo(() => {
-  const today = formatDateToString(CURRENT_DATE);
-
-  const safeActiveNotifications = Array.isArray(activeSpecialNotifications)
-    ? activeSpecialNotifications
-    : [];
-
-  return [...safeActiveNotifications]
-    .filter(item => {
-      if (!item) return false;
-
-      const date = normalizeDateString(item.date || '');
-
-      return date && date >= today;
-    })
-    .sort((a, b) => {
-      const dateA = normalizeDateString(a.date || '');
-      const dateB = normalizeDateString(b.date || '');
-
-      if (dateA !== dateB) {
-        return dateA.localeCompare(dateB);
-      }
-
-      const createdA = new Date(a.createdAt || '').getTime();
-      const createdB = new Date(b.createdAt || '').getTime();
-
-      const safeA = Number.isNaN(createdA) ? 0 : createdA;
-      const safeB = Number.isNaN(createdB) ? 0 : createdB;
-
-      return safeB - safeA;
-    });
-}, [activeSpecialNotifications]);
-// 用途：取得某日所有 active 特別通知
-const getSpecialNotificationsByDate = (dateStr) => {
-  const normalized = normalizeDateString(dateStr);
-
-  return (activeSpecialNotifications || []).filter(item =>
-    normalizeDateString(item.date || '') === normalized
-  );
-};
 // 用途：判斷目前登入者是否是某日期排餐記錄的大廚
 const isCurrentUserCookForMealOnDate = (dateStr) => {
   const normalized = normalizeDateString(dateStr);
@@ -2687,10 +2759,57 @@ const hasAnyMealCookOnDate = (dateStr) => {
     return cookEmails.length > 0;
   });
 };
+// 用途：取得通知建立日期 YYYY-MM-DD
+const getSpecialNoticeCreatedDate = (notice) => {
+  const value = notice?.createdAt;
 
-// 用途：前一日需要 popup 提醒的特別通知
-const specialNoticeReminders = useMemo(() => {
-  const tomorrow = getTomorrowDateString();
+  if (!value) return '';
+
+  // 如果 createdAt 是 Date
+  if (value instanceof Date) {
+    return formatDateToString(value);
+  }
+
+  // 如果 createdAt 是字串
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return formatDateToString(parsed);
+  }
+
+  return '';
+};
+
+// 用途：判斷目前登入者是否符合接收特別通知 popup 的身份
+const canCurrentUserReceiveSpecialNoticePopup = (noticeDate) => {
+  const currentEmail = String(email || '').trim().toLowerCase();
+
+  const isCookUser =
+    userRole === 'cook' ||
+    (
+      Array.isArray(groupMembers) &&
+      groupMembers.some(member =>
+        String(member.email || '').trim().toLowerCase() === currentEmail &&
+        member.userRole === 'cook'
+      )
+    );
+
+  const isCookForThatDate = isCurrentUserCookForMealOnDate(noticeDate);
+
+  const noSpecificCookReceiver =
+    !hasAnyCookInCurrentGroup &&
+    !hasAnyMealCookOnDate(noticeDate);
+
+  return (
+    isCookUser ||
+    isCookForThatDate ||
+    noSpecificCookReceiver
+  );
+};
+
+// 用途：第一次傳出後，需要 popup 的特別通知
+const immediateSpecialNoticeNotifications = useMemo(() => {
+  const today = formatDateToString(CURRENT_DATE);
+  const currentEmail = String(email || '').trim().toLowerCase();
 
   const safeActiveNotifications = Array.isArray(activeSpecialNotifications)
     ? activeSpecialNotifications
@@ -2701,47 +2820,170 @@ const specialNoticeReminders = useMemo(() => {
 
     const noticeDate = normalizeDateString(item.date || '');
 
+    // 過去通知不做第一次 popup
+    if (!noticeDate || noticeDate < today) {
+      return false;
+    }
+
+    const senderEmail = String(item.senderEmail || '').trim().toLowerCase();
+
+    // 自己發出的通知不用通知自己
+    if (senderEmail && senderEmail === currentEmail) {
+      return false;
+    }
+
+    const groupMemberEmails = Array.isArray(item.groupMemberEmails)
+      ? item.groupMemberEmails.map(e => String(e || '').trim().toLowerCase())
+      : [];
+
+    const isGroupMember =
+      currentEmail && groupMemberEmails.includes(currentEmail);
+
+    if (!isGroupMember) {
+      return false;
+    }
+
+    const readByEmails = Array.isArray(item.immediateReadByEmails)
+      ? item.immediateReadByEmails.map(e => String(e || '').trim().toLowerCase())
+      : [];
+
+    const alreadyRead =
+      currentEmail && readByEmails.includes(currentEmail);
+
+    if (alreadyRead) {
+      return false;
+    }
+
+    return canCurrentUserReceiveSpecialNoticePopup(noticeDate);
+  });
+}, [
+  activeSpecialNotifications,
+  email,
+  userRole,
+  groupMembers,
+  uniqueRequests,
+  hasAnyCookInCurrentGroup
+]);
+// 用途：overview 下方列表，只顯示今日及未來的 active 通知
+const sortedUpcomingSpecialNotifications = useMemo(() => {
+  const today = formatDateToString(CURRENT_DATE);
+
+  const safeActiveNotifications = Array.isArray(activeSpecialNotifications)
+    ? activeSpecialNotifications
+    : [];
+
+  return [...safeActiveNotifications]
+    .filter(item => {
+      if (!item) return false;
+
+      const date = normalizeDateString(item.date || '');
+
+      return date && date >= today;
+    })
+    .sort((a, b) => {
+      const dateA = normalizeDateString(a.date || '');
+      const dateB = normalizeDateString(b.date || '');
+
+      if (dateA !== dateB) {
+        return dateA.localeCompare(dateB);
+      }
+
+      const createdA = new Date(a.createdAt || '').getTime();
+      const createdB = new Date(b.createdAt || '').getTime();
+
+      const safeA = Number.isNaN(createdA) ? 0 : createdA;
+      const safeB = Number.isNaN(createdB) ? 0 : createdB;
+
+      return safeB - safeA;
+    });
+}, [activeSpecialNotifications]);
+
+// 用途：今日及未來特別通知，按同一人同一日合併顯示
+const sortedUpcomingSpecialNotificationGroups = useMemo(() => {
+  const merged = mergeSpecialNotificationsByPersonDate(
+    sortedUpcomingSpecialNotifications
+  );
+
+  return merged.sort((a, b) => {
+    const dateA = normalizeDateString(a.date || '');
+    const dateB = normalizeDateString(b.date || '');
+
+    if (dateA !== dateB) {
+      return dateA.localeCompare(dateB);
+    }
+
+    const senderA = String(a.senderNickname || a.senderEmail || '');
+    const senderB = String(b.senderNickname || b.senderEmail || '');
+
+    return senderA.localeCompare(senderB);
+  });
+}, [sortedUpcomingSpecialNotifications]);
+// 用途：取得某日所有 active 特別通知
+const getSpecialNotificationsByDate = (dateStr) => {
+  const normalized = normalizeDateString(dateStr);
+
+  return (activeSpecialNotifications || []).filter(item =>
+    normalizeDateString(item.date || '') === normalized
+  );
+};
+// 用途：通知生效日前一天需要 popup 的特別通知
+// 注意：今天 / 明天的通知只做第一次傳出 popup，不做第二次前一天提醒
+const specialNoticeReminders = useMemo(() => {
+  const today = formatDateToString(CURRENT_DATE);
+  const tomorrow = getTomorrowDateString();
+  const currentEmail = String(email || '').trim().toLowerCase();
+
+  const safeActiveNotifications = Array.isArray(activeSpecialNotifications)
+    ? activeSpecialNotifications
+    : [];
+
+  return safeActiveNotifications.filter(item => {
+    if (!item) return false;
+
+    const noticeDate = normalizeDateString(item.date || '');
+
+    // 只處理明日生效的通知
     if (noticeDate !== tomorrow) {
       return false;
     }
 
+    const createdDate = getSpecialNoticeCreatedDate(item);
+
+    // 如果是今天才傳出的明日通知，已經做第一次 popup，不再做第二次
+    if (createdDate === today) {
+      return false;
+    }
+
+    const senderEmail = String(item.senderEmail || '').trim().toLowerCase();
+
+    // 自己發出的通知不用通知自己
+    if (senderEmail && senderEmail === currentEmail) {
+      return false;
+    }
+
     const readByEmails = Array.isArray(item.reminderReadByEmails)
-      ? item.reminderReadByEmails
+      ? item.reminderReadByEmails.map(e => String(e || '').trim().toLowerCase())
       : [];
 
-    const alreadyRead = email && readByEmails.includes(email);
+    const alreadyRead =
+      currentEmail && readByEmails.includes(currentEmail);
 
     if (alreadyRead) {
       return false;
     }
 
     const groupMemberEmails = Array.isArray(item.groupMemberEmails)
-      ? item.groupMemberEmails
+      ? item.groupMemberEmails.map(e => String(e || '').trim().toLowerCase())
       : [];
 
     const isGroupMember =
-      email && groupMemberEmails.includes(email);
+      currentEmail && groupMemberEmails.includes(currentEmail);
 
     if (!isGroupMember) {
       return false;
     }
 
-    const isCookUser = userRole === 'cook';
-    const isCookForThatDate = isCurrentUserCookForMealOnDate(noticeDate);
-
-    const noSpecificCookReceiver =
-      !hasAnyCookInCurrentGroup &&
-      !hasAnyMealCookOnDate(noticeDate);
-
-    // 收提醒條件：
-    // 1. 自己是 cook
-    // 2. 自己是當日排餐大廚
-    // 3. 群組無 cook 且當日無排餐大廚，fallback 給全群組成員
-    return (
-      isCookUser ||
-      isCookForThatDate ||
-      noSpecificCookReceiver
-    );
+    return canCurrentUserReceiveSpecialNoticePopup(noticeDate);
   });
 }, [
   activeSpecialNotifications,
@@ -2751,21 +2993,43 @@ const specialNoticeReminders = useMemo(() => {
   groupMembers,
   hasAnyCookInCurrentGroup
 ]);
-// 用途：取得某日月曆顯示 icon，最多顯示 3 個
-const getSpecialNoticeIconsForDate = (dateStr) => {
-  const notices = getSpecialNotificationsByDate(dateStr);
 
-  const icons = notices.map(item => {
-    const meta = getSpecialNoticeMeta(
-      item.noticeType,
-      item.otherText
-    );
 
-    return meta.icon;
-  });
+// 用途：所有需要 popup 的特別通知，包括第一次傳出 + 前一天提醒
+const specialNoticePopupItems = useMemo(() => {
+  return [
+    ...(Array.isArray(immediateSpecialNoticeNotifications)
+      ? immediateSpecialNoticeNotifications.map(item => ({
+          ...item,
+          popupType: 'immediate'
+        }))
+      : []),
 
-  return Array.from(new Set(icons));
-};
+    ...(Array.isArray(specialNoticeReminders)
+      ? specialNoticeReminders.map(item => ({
+          ...item,
+          popupType: 'reminder'
+        }))
+      : [])
+  ];
+}, [immediateSpecialNoticeNotifications, specialNoticeReminders]);
+
+const specialNoticePopupCount = Array.isArray(specialNoticePopupItems)
+  ? specialNoticePopupItems.length
+  : 0;
+
+// 用途：如果有需要 popup 的特別通知，自動 popup
+useEffect(() => {
+  if (appStage === 'main' && specialNoticePopupCount > 0) {
+    setSpecialNoticeReminderModalVisible(true);
+  }
+
+  if (specialNoticePopupCount === 0) {
+    setSpecialNoticeReminderModalVisible(false);
+  }
+}, [appStage, specialNoticePopupCount]);
+
+
 // 用途：關閉單一大廚通知
 const dismissOneCookMessage = async (req) => {
   const key = getCookMessageKey(req);
@@ -2794,21 +3058,52 @@ const dismissAllCookMessages = async () => {
 
   setSenderNotificationModalVisible(false);
 };
-// 用途：把單一特別通知提醒標記為已讀
-const markSpecialNoticeReminderAsRead = async (notice) => {
+
+const toggleSpecialNoticeType = (typeKey) => {
+  setSpecialNoticeTypes(prev => {
+    const safePrev = Array.isArray(prev) ? prev : [];
+
+    if (safePrev.includes(typeKey)) {
+      return safePrev.filter(item => item !== typeKey);
+    }
+
+    return [...safePrev, typeKey];
+  });
+
+  // 如果取消 other，就清空其他文字
+  if (typeKey === 'other' && specialNoticeTypes.includes('other')) {
+    setSpecialNoticeOtherText('');
+  }
+};
+
+// 用途：把單一特別通知 popup 標記為已讀
+const markSpecialNoticePopupAsRead = async (notice) => {
   try {
     if (!email || !notice?.id) return;
 
-    const oldReadByEmails = Array.isArray(notice.reminderReadByEmails)
-      ? notice.reminderReadByEmails
+    const currentEmail = String(email || '').trim().toLowerCase();
+
+    const oldImmediateReadByEmails = Array.isArray(notice.immediateReadByEmails)
+      ? notice.immediateReadByEmails.map(e => String(e || '').trim().toLowerCase())
       : [];
 
-    const nextReadByEmails = Array.from(
-      new Set([...oldReadByEmails, email])
-    );
+    const oldReminderReadByEmails = Array.isArray(notice.reminderReadByEmails)
+      ? notice.reminderReadByEmails.map(e => String(e || '').trim().toLowerCase())
+      : [];
+
+    const nextImmediateReadByEmails =
+      notice.popupType === 'immediate'
+        ? Array.from(new Set([...oldImmediateReadByEmails, currentEmail].filter(Boolean)))
+        : oldImmediateReadByEmails;
+
+    const nextReminderReadByEmails =
+      notice.popupType === 'reminder'
+        ? Array.from(new Set([...oldReminderReadByEmails, currentEmail].filter(Boolean)))
+        : oldReminderReadByEmails;
 
     await db.collection('specialNotifications').update(notice.id, {
-      noticeType: notice.noticeType || '',
+      noticeTypes: getNoticeTypesFromItem(notice),
+      noticeType: notice.noticeType || getNoticeTypesFromItem(notice)[0] || '',
       otherText: notice.otherText || '',
 
       date: notice.date || '',
@@ -2831,7 +3126,8 @@ const markSpecialNoticeReminderAsRead = async (notice) => {
 
       status: notice.status || 'active',
 
-      reminderReadByEmails: nextReadByEmails,
+      immediateReadByEmails: nextImmediateReadByEmails,
+      reminderReadByEmails: nextReminderReadByEmails,
 
       createdAt: notice.createdAt || new Date(),
       updatedAt: new Date(),
@@ -2841,24 +3137,24 @@ const markSpecialNoticeReminderAsRead = async (notice) => {
       canceledByNickname: notice.canceledByNickname || ''
     });
   } catch (error) {
-    console.log('markSpecialNoticeReminderAsRead error:', error);
-    showMessage('標記提醒已讀失敗', error.message || String(error));
+    console.log('markSpecialNoticePopupAsRead error:', error);
+    showMessage('標記特別通知已讀失敗', error.message || String(error));
   }
 };
 
-// 用途：關閉全部明日特別通知提醒
-const dismissAllSpecialNoticeReminders = async () => {
+
+const dismissAllSpecialNoticePopups = async () => {
   try {
-    for (const notice of specialNoticeReminders || []) {
-      await markSpecialNoticeReminderAsRead(notice);
+    for (const notice of specialNoticePopupItems || []) {
+      await markSpecialNoticePopupAsRead(notice);
     }
 
     await loadSpecialNotificationsFromFirebase();
 
     setSpecialNoticeReminderModalVisible(false);
   } catch (error) {
-    console.log('dismissAllSpecialNoticeReminders error:', error);
-    showMessage('關閉特別通知提醒失敗', error.message || String(error));
+    console.log('dismissAllSpecialNoticePopups error:', error);
+    showMessage('關閉特別通知失敗', error.message || String(error));
   }
 };
 // 用途：點菜 Modal 的大廚下拉選單，永遠顯示所有群組成員
@@ -3534,76 +3830,117 @@ const sendSpecialNotification = async () => {
       return showMessage('不能選擇過去的日子。');
     }
 
-    if (!specialNoticeType) {
-      return showMessage('請選擇通知類型。');
-    }
+    const selectedTypes = Array.isArray(specialNoticeTypes)
+  ? specialNoticeTypes
+  : [];
+
+if (selectedTypes.length === 0) {
+  return showMessage('請至少選擇一個通知類型。');
+}
 
     const finalOtherText = specialNoticeOtherText.trim();
 
-    if (specialNoticeType === 'other' && !finalOtherText) {
-      return showMessage('請輸入其他通知內容。');
-    }
+    if (selectedTypes.includes('other') && !finalOtherText) {
+  return showMessage('請輸入其他通知內容。');
+}
 
-    const duplicateNotice = (specialNotifications || []).find(item =>
-      item.status !== 'canceled' &&
-      item.groupCode === groupInviteCode &&
-      normalizeDateString(item.date || '') === normalizedDate &&
-      item.noticeType === specialNoticeType &&
-      String(item.otherText || '').trim() === finalOtherText &&
-      item.senderEmail === email
-    );
+    const duplicateNotice = (specialNotifications || []).find(item => {
+  const existingTypes = getNoticeTypesFromItem(item);
+
+  const sameTypes =
+    existingTypes.length === selectedTypes.length &&
+    existingTypes.every(type => selectedTypes.includes(type));
+
+  return (
+    item.status !== 'canceled' &&
+    item.groupCode === groupInviteCode &&
+    normalizeDateString(item.date || '') === normalizedDate &&
+    item.senderEmail === email &&
+    sameTypes &&
+    String(item.otherText || '').trim() === finalOtherText
+  );
+});
 
     if (duplicateNotice) {
       return showMessage('你已經送過相同的特別通知。');
     }
 
-    const groupMemberEmails = (groupMembers || [])
-      .map(member => member.email)
-      .filter(Boolean);
+    let groupMemberEmails = (groupMembers || [])
+  .map(member => member.email)
+  .filter(Boolean);
 
-    if (email && !groupMemberEmails.includes(email)) {
-      groupMemberEmails.push(email);
-    }
+// 如果 groupMembers 尚未載入完整，就從 familyGroups 補 memberEmails
+if (groupMemberEmails.length === 0 && groupInviteCode) {
+  const groups = await db.collection('familyGroups').getAll();
+  const currentGroup = (Array.isArray(groups) ? groups : []).find(
+    group => group.inviteCode === groupInviteCode
+  );
 
-    const noticeData = {
-      noticeType: specialNoticeType,
-      otherText: specialNoticeType === 'other' ? finalOtherText : '',
+  if (currentGroup && Array.isArray(currentGroup.memberEmails)) {
+    groupMemberEmails = currentGroup.memberEmails.filter(Boolean);
+  }
+}
 
-      date: normalizedDate,
+if (email && !groupMemberEmails.includes(email)) {
+  groupMemberEmails.push(email);
+}
 
-      groupCode: groupInviteCode || '',
-      familyGroupName: familyGroupName || '',
+groupMemberEmails = Array.from(
+  new Set(
+    groupMemberEmails
+      .map(e => String(e || '').trim().toLowerCase())
+      .filter(Boolean)
+  )
+);
 
-      groupMemberEmails,
-      groupAdminEmails: Array.isArray(groupAdminEmails) ? groupAdminEmails : [],
+const currentEmail = String(email || '').trim().toLowerCase();
 
-      senderEmail: email || '',
-      senderNickname: nickname || '',
+const noticeData = {
+  noticeTypes: selectedTypes,
 
-      status: 'active',
+  // 保留舊欄位，方便舊 UI fallback；用第一個類型
+  noticeType: selectedTypes[0] || '',
 
-      // 用途：前一日 popup 後，記錄哪些人已讀
-      reminderReadByEmails: [],
+  otherText: selectedTypes.includes('other') ? finalOtherText : '',
 
-      createdAt: new Date(),
-      updatedAt: new Date(),
+  date: normalizedDate,
 
-      canceledAt: '',
-      canceledByEmail: '',
-      canceledByNickname: ''
-    };
+  groupCode: groupInviteCode || '',
+  familyGroupName: familyGroupName || '',
+
+  groupMemberEmails,
+  groupAdminEmails: Array.isArray(groupAdminEmails) ? groupAdminEmails : [],
+
+  senderEmail: currentEmail,
+  senderNickname: nickname || '',
+
+  status: 'active',
+
+  // 第一次傳出通知：自己不用收到，所以先標記自己已讀
+  immediateReadByEmails: currentEmail ? [currentEmail] : [],
+
+  // 前一天提醒：自己也不用收到，所以先標記自己已讀
+  reminderReadByEmails: currentEmail ? [currentEmail] : [],
+
+  createdAt: new Date(),
+  updatedAt: new Date(),
+
+  canceledAt: '',
+  canceledByEmail: '',
+  canceledByNickname: ''
+};
 
     setIsSpecialNoticeSubmitting(true);
 
     await db.collection('specialNotifications').add(noticeData);
 
-    await loadSpecialNotificationsFromFirebase();
+await loadSpecialNotificationsFromFirebase();
 
-    setSpecialNoticeDateInput(formatDateToString(CURRENT_DATE));
-    setSpecialNoticeType('');
-    setSpecialNoticeOtherText('');
-    setIsSpecialNoticeSubmitting(false);
-    setSpecialNoticeSubPage('overview');
+setSpecialNoticeDateInput(formatDateToString(CURRENT_DATE));
+setSpecialNoticeTypes([]);
+setSpecialNoticeOtherText('');
+setIsSpecialNoticeSubmitting(false);
+setSpecialNoticeSubPage('overview');
 
   } catch (error) {
     console.log('sendSpecialNotification error:', error);
@@ -3625,8 +3962,9 @@ const cancelSpecialNotification = async (notice) => {
     }
 
     await db.collection('specialNotifications').update(notice.id, {
-      noticeType: notice.noticeType || '',
-      otherText: notice.otherText || '',
+      noticeTypes: getNoticeTypesFromItem(notice),
+noticeType: notice.noticeType || getNoticeTypesFromItem(notice)[0] || '',
+otherText: notice.otherText || '',
 
       date: notice.date || '',
 
@@ -3648,9 +3986,14 @@ const cancelSpecialNotification = async (notice) => {
 
       status: 'canceled',
 
-      reminderReadByEmails: Array.isArray(notice.reminderReadByEmails)
-        ? notice.reminderReadByEmails
-        : [],
+immediateReadByEmails: Array.isArray(notice.immediateReadByEmails)
+  ? notice.immediateReadByEmails
+  : [],
+
+reminderReadByEmails: Array.isArray(notice.reminderReadByEmails)
+  ? notice.reminderReadByEmails
+  : [],
+
 
       createdAt: notice.createdAt || new Date(),
       updatedAt: new Date(),
@@ -3665,6 +4008,34 @@ const cancelSpecialNotification = async (notice) => {
 
   } catch (error) {
     console.log('cancelSpecialNotification error:', error);
+    showMessage('取消特別通知失敗', error.message || String(error));
+  }
+};
+
+// 用途：取消同一人同一日的合併特別通知
+const cancelSpecialNotificationGroup = async (noticeGroup) => {
+  try {
+    const originalNotices = Array.isArray(noticeGroup?.mergedOriginalNotices)
+      ? noticeGroup.mergedOriginalNotices
+      : [noticeGroup];
+
+    const targetNotices = originalNotices.filter(item =>
+      item &&
+      item.id &&
+      item.senderEmail === email
+    );
+
+    if (targetNotices.length === 0) {
+      return showMessage('只可以取消自己發出的特別通知。');
+    }
+
+    for (const notice of targetNotices) {
+      await cancelSpecialNotification(notice);
+    }
+
+    await loadSpecialNotificationsFromFirebase();
+  } catch (error) {
+    console.log('cancelSpecialNotificationGroup error:', error);
     showMessage('取消特別通知失敗', error.message || String(error));
   }
 };
@@ -3780,7 +4151,6 @@ if (remainingIncomingRequests.length === 0) {
   setRequestInboxVisible(true);
 }
 
-showMessage('已同意該點菜要求。');
   } catch (error) {
     console.log('handleApproveRequest error:', error);
     showMessage('同意點菜要求失敗', error.message || String(error));
@@ -3800,6 +4170,37 @@ const isRejectTargetFruit = () => {
     req.requestType === 'fruit'
   );
 };
+
+// 用途：如果目前登入者有 pending 點菜要求，打開 App 後自動彈出處理視窗
+// 並沿用大廚上一次「是否加入購物清單」選項
+useEffect(() => {
+  if (appStage !== 'main') return;
+  if (!Array.isArray(incomingRequests)) return;
+
+  // ✅ 有 request → 強制彈
+  if (incomingRequests.length > 0) {
+    // 第一次 or 有新 request
+    if (!hasShownInboxRef.current) {
+      hasShownInboxRef.current = true;
+
+      setApproveAddToList(lastApproveAddToList === true);
+
+      // ✅ 強制 reopen（解決你「無反應」問題）
+      setRequestInboxVisible(false);
+
+      setTimeout(() => {
+        setRequestInboxVisible(true);
+        setForceOpenInboxKey(prev => prev + 1);
+      }, 50);
+    }
+
+    return;
+  }
+
+  // ✅ 無 request → reset
+  hasShownInboxRef.current = false;
+
+}, [appStage, incomingRequests.length]);
 // 用途：打開拒絕 / 取消點菜要求視窗
 // 大廚可以額外寫訊息給發起人，也可以留空只傳官方通知
 const openRejectModal = (req) => {
@@ -3847,8 +4248,8 @@ const actionDisplayName = nickname || email || '對方';
 const isFruitRequest = targetRequests[0]?.requestType === 'fruit';
 
 const officialNotice = isFruitRequest
-  ? `${actionDisplayName}已取消此水果要求。`
-  : `${actionDisplayName}已拒絕此點菜要求。`;
+  ? `${actionDisplayName}取消要求囉。`
+  : `${actionDisplayName}取消要求囉。`;
 
 const finalMessage = reason
   ? `${officialNotice}\n${actionDisplayName}留言：${reason}`
@@ -5799,59 +6200,43 @@ showConfirmMessage(
 );
 };
 // 用途：分頁 3 特別通知月曆點擊
+// 有通知：過去 / 今日 / 未來都可以查看
+// 無通知：過去只提示無紀錄；今日 / 未來跳去新增通知
 const handleSpecialNoticeCellPress = (day) => {
   if (!day) return;
 
   const clickedDate = `${specialNoticeYear}-${String(specialNoticeMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 
   const noticesOnDate = getSpecialNotificationsByDate(clickedDate);
+  const safeNoticesOnDate = Array.isArray(noticesOnDate)
+    ? noticesOnDate
+    : [];
 
-  if (noticesOnDate.length > 0) {
-    showMessage(
-      `📅 ${clickedDate} 特別通知`,
-      noticesOnDate
-        .map(item => {
-          const meta = getSpecialNoticeMeta(
-            item.noticeType,
-            item.otherText
-          );
+  if (safeNoticesOnDate.length > 0) {
+  const mergedNoticesOnDate = mergeSpecialNotificationsByPersonDate(
+    safeNoticesOnDate
+  );
 
-          return `• ${item.senderNickname || item.senderEmail || '未知'}：${meta.fullLabel}`;
-        })
-        .join('\n')
-    );
+  showMessage(
+    `${clickedDate} 特別通知`,
+    mergedNoticesOnDate
+      .map(item => {
+        return `• ${item.senderNickname || item.senderEmail || '未知'}：${getMergedSpecialNoticeDisplayText(item)}`;
+      })
+      .join('\n')
+  );
 
-    return;
-  }
+  return;
+}
 
   if (isPastDate(clickedDate)) {
-    return showMessage('已過去的日子不能新增特別通知。');
+    return showMessage('該日未有特別通知紀錄。');
   }
 
   setSpecialNoticeDateInput(clickedDate);
-  setSpecialNoticeType('');
+  setSpecialNoticeTypes([]);
   setSpecialNoticeOtherText('');
   setSpecialNoticeSubPage('create');
-};
-const renderTagButtons = (tags, currentSelected, onToggle) => {
-  const safeTags = Array.isArray(tags) ? tags : [];
-  const safeSelected = Array.isArray(currentSelected) ? currentSelected : [];
-
-  return safeTags.map(tag => {
-    const isSelected = safeSelected.includes(tag);
-
-    return (
-      <TouchableOpacity
-        key={tag}
-        style={[styles.tagButtonBig, isSelected && styles.tagButtonSelected]}
-        onPress={() => onToggle(tag)}
-      >
-        <Text style={[styles.tagTextBig, isSelected && { color: '#fff' }]}>
-          {tag}
-        </Text>
-      </TouchableOpacity>
-    );
-  });
 };
 const renderSubTabButton = (label, isActive, onPress) => {
   return (
@@ -5874,7 +6259,7 @@ const renderSubTabButton = (label, isActive, onPress) => {
     </TouchableOpacity>
   );
 };
-
+//
   const addToShoppingList = (ingredientsString) => {
     if (!ingredientsString || ingredientsString === '未填寫') return;
     const items = ingredientsString.split(/、|,|，/).map(item => item.trim()).filter(i => i !== "");
@@ -6215,7 +6600,13 @@ return (
   <TouchableOpacity
     activeOpacity={0.85}
     style={styles.requestInboxBigButton}
-    onPress={() => setRequestInboxVisible(true)}
+    onPress={() => {
+  setRequestInboxVisible(false);
+  setTimeout(() => {
+    setRequestInboxVisible(true);
+  }, 50);
+}}
+
   >
     <View style={styles.requestInboxBigButtonLeft}>
       <Text style={styles.requestInboxBigIcon}>📨</Text>
@@ -7010,7 +7401,7 @@ const canCurrentUserReview =
         specialNoticeSubPage === 'create',
         () => {
           setSpecialNoticeDateInput(formatDateToString(CURRENT_DATE));
-          setSpecialNoticeType('');
+          setSpecialNoticeTypes([]);
           setSpecialNoticeOtherText('');
           setSpecialNoticeSubPage('create');
         }
@@ -7053,22 +7444,23 @@ const canCurrentUserReview =
                 );
               }
 
-              const thisDateStr = `${specialNoticeYear}-${String(specialNoticeMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+              const thisDateStr = `${specialNoticeYear}-${String(
+                specialNoticeMonth
+              ).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 
               const isToday =
                 specialNoticeYear === CURRENT_DATE.getFullYear() &&
-                specialNoticeMonth === (CURRENT_DATE.getMonth() + 1) &&
+                specialNoticeMonth === CURRENT_DATE.getMonth() + 1 &&
                 day === CURRENT_DATE.getDate();
 
               const isPast = isPastDate(thisDateStr);
 
-              const icons = getSpecialNoticeIconsForDate(thisDateStr);
-              const safeIcons = Array.isArray(icons) ? icons : [];
+              const noticesOnDate = getSpecialNotificationsByDate(thisDateStr);
+              const safeNoticesOnDate = Array.isArray(noticesOnDate)
+                ? noticesOnDate
+                : [];
 
-              const hasNotice = safeIcons.length > 0;
-
-              const visibleIcons = safeIcons.slice(0, 3);
-              const moreCount = safeIcons.length - visibleIcons.length;
+              const hasNotice = safeNoticesOnDate.length > 0;
 
               return (
                 <TouchableOpacity
@@ -7093,22 +7485,7 @@ const canCurrentUserReview =
                   </Text>
 
                   {hasNotice && (
-                    <View style={styles.calendarNoticeIconRow}>
-                      {visibleIcons.map((icon, iconIndex) => (
-                        <Text
-                          key={`${thisDateStr}-${icon}-${iconIndex}`}
-                          style={styles.calendarNoticeIconText}
-                        >
-                          {icon}
-                        </Text>
-                      ))}
-
-                      {moreCount > 0 && (
-                        <Text style={styles.calendarNoticeMoreText}>
-                          +{moreCount}
-                        </Text>
-                      )}
-                    </View>
+                    <View style={styles.calendarDotWhite} />
                   )}
                 </TouchableOpacity>
               );
@@ -7118,13 +7495,13 @@ const canCurrentUserReview =
 
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionTitle}>
-            🔔 今日及未來特別通知
+            🔔 特別通知
           </Text>
         </View>
 
-        {(Array.isArray(sortedUpcomingSpecialNotifications)
-          ? sortedUpcomingSpecialNotifications.length
-          : 0) === 0 ? (
+        {(Array.isArray(sortedUpcomingSpecialNotificationGroups)
+  ? sortedUpcomingSpecialNotificationGroups.length
+  : 0) === 0 ? (
           <View style={styles.formCard}>
             <Text style={styles.emptyShoppingText}>
               暫時未有特別通知。
@@ -7135,7 +7512,7 @@ const canCurrentUserReview =
               style={styles.addRecipeFullButton}
               onPress={() => {
                 setSpecialNoticeDateInput(formatDateToString(CURRENT_DATE));
-                setSpecialNoticeType('');
+                setSpecialNoticeTypes([]);
                 setSpecialNoticeOtherText('');
                 setSpecialNoticeSubPage('create');
               }}
@@ -7146,18 +7523,16 @@ const canCurrentUserReview =
             </TouchableOpacity>
           </View>
         ) : (
-          (Array.isArray(sortedUpcomingSpecialNotifications)
-            ? sortedUpcomingSpecialNotifications
-            : []
-          ).map(notice => {
-            const meta = getSpecialNoticeMeta(
-              notice.noticeType,
-              notice.otherText
-            );
+          (Array.isArray(sortedUpcomingSpecialNotificationGroups)
+  ? sortedUpcomingSpecialNotificationGroups
+  : []
+).map(notice => {
+  const noticeDisplayText = getMergedSpecialNoticeDisplayText(notice);
 
-            const canCancel = notice.senderEmail === email;
+  const canCancel = notice.senderEmail === email;
 
-            return (
+  return (
+
               <View key={notice.id} style={styles.requestCard}>
                 <View style={styles.requestCardHeader}>
                   <Text style={styles.dishName}>
@@ -7172,7 +7547,7 @@ const canCurrentUserReview =
                 <Text style={styles.requestMetaText}>
                   通知：
                   <Text style={styles.requestMetaStrong}>
-                    {meta.fullLabel}
+                    {noticeDisplayText}
                   </Text>
                 </Text>
 
@@ -7187,7 +7562,7 @@ const canCurrentUserReview =
                   <View style={styles.actionRow}>
                     <TouchableOpacity
                       style={[styles.actionBtn, styles.dangerActionButton]}
-                      onPress={() => cancelSpecialNotification(notice)}
+                      onPress={() => cancelSpecialNotificationGroup(notice)}
                     >
                       <Text style={styles.actionBtnText}>
                         👎 取消通知
@@ -7210,22 +7585,24 @@ const canCurrentUserReview =
 
         <Text style={styles.label}>通知日期：</Text>
 
-<TouchableOpacity
-  activeOpacity={0.85}
-  onPress={openSpecialNoticeCalendar}
->
-  <View style={styles.input}>
-    <Text style={{ color: specialNoticeDateInput ? '#333' : '#B8A89A' }}>
-      {specialNoticeDateInput || '請選擇日期'}
-    </Text>
-  </View>
-</TouchableOpacity>
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={openSpecialNoticeCalendar}
+        >
+          <View style={styles.input}>
+            <Text style={{ color: specialNoticeDateInput ? '#333' : '#B8A89A' }}>
+              {specialNoticeDateInput || '請選擇日期'}
+            </Text>
+          </View>
+        </TouchableOpacity>
 
         <Text style={styles.label}>通知類型：</Text>
 
         <View style={styles.specialNoticeTypeGrid}>
           {SPECIAL_NOTICE_TYPES.map(item => {
-            const isSelected = specialNoticeType === item.key;
+            const isSelected =
+              Array.isArray(specialNoticeTypes) &&
+              specialNoticeTypes.includes(item.key);
 
             return (
               <TouchableOpacity
@@ -7235,13 +7612,7 @@ const canCurrentUserReview =
                   styles.specialNoticeTypeButton,
                   isSelected && styles.specialNoticeTypeButtonActive
                 ]}
-                onPress={() => {
-                  setSpecialNoticeType(item.key);
-
-                  if (item.key !== 'other') {
-                    setSpecialNoticeOtherText('');
-                  }
-                }}
+                onPress={() => toggleSpecialNoticeType(item.key)}
               >
                 <Text
                   style={[
@@ -7249,25 +7620,27 @@ const canCurrentUserReview =
                     isSelected && styles.specialNoticeTypeTextActive
                   ]}
                 >
-                  {item.fullLabel}
+                  {isSelected ? '✓ ' : ''}
+                  {item.label}
                 </Text>
               </TouchableOpacity>
             );
           })}
         </View>
 
-        {specialNoticeType === 'other' && (
-          <>
-            <Text style={styles.label}>其他通知內容：</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="例如：今晚要早點吃飯"
-              placeholderTextColor="#B8A89A"
-              value={specialNoticeOtherText}
-              onChangeText={setSpecialNoticeOtherText}
-            />
-          </>
-        )}
+        {Array.isArray(specialNoticeTypes) &&
+          specialNoticeTypes.includes('other') && (
+            <>
+              <Text style={styles.label}>其他通知內容：</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="例如：今晚要早點吃飯"
+                placeholderTextColor="#B8A89A"
+                value={specialNoticeOtherText}
+                onChangeText={setSpecialNoticeOtherText}
+              />
+            </>
+          )}
 
         <View style={styles.specialNoticeButtonGroup}>
           <TouchableOpacity
@@ -7275,7 +7648,8 @@ const canCurrentUserReview =
             style={[
               styles.specialNoticeFullButton,
               styles.specialNoticeSubmitButton,
-              isSpecialNoticeSubmitting && styles.specialNoticeSubmitButtonDisabled
+              isSpecialNoticeSubmitting &&
+                styles.specialNoticeSubmitButtonDisabled
             ]}
             disabled={isSpecialNoticeSubmitting}
             onPress={sendSpecialNotification}
@@ -7302,7 +7676,6 @@ const canCurrentUserReview =
     )}
   </View>
 )}
-
 {/* ================= 分頁 4: 購物清單 ================= */}
 {currentTab === 'shopping' && (
   <View style={styles.pageContent}>
@@ -7698,55 +8071,65 @@ const canCurrentUserReview =
   <View style={styles.modalOverlay}>
     <View style={styles.modalCard}>
       <Text style={styles.sectionTitleLarge}>
-        🔔 明日特別通知
+        🔔 特別通知
       </Text>
 
-      <Text style={styles.requestMetaTextBottom}>
-        以下係明日需要留意的家庭安排：
-      </Text>
-
-      {(specialNoticeReminders || []).map(notice => {
-        const meta = getSpecialNoticeMeta(
-          notice.noticeType,
-          notice.otherText
-        );
+      {(Array.isArray(specialNoticePopupItems) ? specialNoticePopupItems : []).map(notice => {
+        const noticeDisplayText = getSpecialNoticeDisplayText(notice);
 
         return (
           <View key={notice.id} style={styles.requestCard}>
             <View style={styles.requestCardHeader}>
               <Text style={styles.dishName}>
-                {meta.fullLabel}
+                🙋‍♂️ {notice.senderNickname || notice.senderEmail || '未知'}
               </Text>
 
               <Text style={[styles.statusBadge, styles.statusBadgePending]}>
-                明日
-              </Text>
+  {notice.popupType === 'reminder' ? '明天提醒' : '新通知'}
+</Text>
             </View>
 
             <Text style={styles.requestMetaText}>
-              日期：
-              <Text style={styles.timeHighlight}>
-                {normalizeDateString(notice.date || '')}
+              通知：
+              <Text style={styles.requestMetaStrong}>
+                {noticeDisplayText}
               </Text>
             </Text>
 
-            <Text style={styles.requestMetaText}>
-              發起成員：🙋‍♂️{' '}
-              <Text style={styles.requestMetaStrong}>
-                {notice.senderNickname || notice.senderEmail || '未知'}
+            <Text style={styles.requestMetaTextBottom}>
+              日期：
+              <Text style={styles.timeHighlight}>
+                {normalizeDateString(notice.date || '')}
               </Text>
             </Text>
           </View>
         );
       })}
 
-      <View style={styles.actionRow}>
+      <View style={styles.specialNoticeButtonGroup}>
         <TouchableOpacity
-          style={[styles.actionBtn, styles.successActionButton]}
-          onPress={dismissAllSpecialNoticeReminders}
+          activeOpacity={0.85}
+          style={[
+            styles.specialNoticeFullButton,
+            styles.specialNoticeSubmitButton
+          ]}
+          onPress={dismissAllSpecialNoticePopups}
         >
-          <Text style={styles.actionBtnText}>
+          <Text style={styles.specialNoticePrimaryButtonText}>
             知道了
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={[
+            styles.specialNoticeFullButton,
+            styles.specialNoticeBackButton
+          ]}
+          onPress={() => setSpecialNoticeReminderModalVisible(false)}
+        >
+          <Text style={styles.specialNoticeBackButtonText}>
+            稍後再看
           </Text>
         </TouchableOpacity>
       </View>
@@ -8810,97 +9193,112 @@ contentContainerStyle={{
     </View>
   </View>
 </Modal>
-{/* 日曆 Modal */}
+{/* 日曆 Modal：點菜 / 排餐日期選擇 */}
 <Modal
   visible={calendarVisible}
   transparent
   animationType="fade"
+  onRequestClose={() => setCalendarVisible(false)}
 >
-  <View style={{
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    padding: 20
-  }}>
-    <View style={{
-      backgroundColor: '#fff',
-      borderRadius: 16,
-      padding: 10
-    }}>
-      
-<View style={styles.calendarContainer}>
-  
-  {/* Header */}
-  <View style={styles.monthSwitcherRow}>
-    <TouchableOpacity onPress={handlePrevMonth}>
-      <Text style={styles.switchMonthText}>◀</Text>
-    </TouchableOpacity>
+  <View
+    style={{
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.4)',
+      justifyContent: 'center',
+      padding: 20
+    }}
+  >
+    <View
+      style={{
+        backgroundColor: '#fff',
+        borderRadius: 16,
+        padding: 10
+      }}
+    >
+      <View style={styles.calendarContainer}>
+        {/* Header */}
+        <View style={styles.monthSwitcherRow}>
+          <TouchableOpacity onPress={handlePrevMonth}>
+            <Text style={styles.switchMonthText}>◀</Text>
+          </TouchableOpacity>
 
-    <Text style={styles.monthTitle}>
-      {currentYear}年 {currentMonth}月
-    </Text>
+          <Text style={styles.monthTitle}>
+            {currentYear}年 {currentMonth}月
+          </Text>
 
-    <TouchableOpacity onPress={handleNextMonth}>
-      <Text style={styles.switchMonthText}>▶</Text>
-    </TouchableOpacity>
-  </View>
+          <TouchableOpacity onPress={handleNextMonth}>
+            <Text style={styles.switchMonthText}>▶</Text>
+          </TouchableOpacity>
+        </View>
 
-  {/* 星期 */}
-  <View style={styles.calendarHeaderRow}>
-    {['日','一','二','三','四','五','六'].map(w => (
-      <Text key={w} style={styles.calendarHeaderCell}>{w}</Text>
-    ))}
-  </View>
+        {/* 星期 */}
+        <View style={styles.calendarHeaderRow}>
+          {['日', '一', '二', '三', '四', '五', '六'].map(w => (
+            <Text key={w} style={styles.calendarHeaderCell}>
+              {w}
+            </Text>
+          ))}
+        </View>
 
-  {/* Grid */}
-  <View style={styles.calendarGrid}>
-    {calendarCells.map((day, index) => {
-      if (!day) {
-        return <View key={index} style={styles.calendarCellEmpty} />;
-      }
-
-      const thisDateStr =
-        `${currentYear}-${String(currentMonth).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-
-      const isSelected = thisDateStr === customDateInput;
-      const isPast = isPastDate(thisDateStr);
-
-      return (
-        <TouchableOpacity
-          key={day}
-          style={[
-            styles.calendarCell,
-            isSelected && { backgroundColor: '#FF8C42' },
-            isPast && { opacity: 0.4 }
-          ]}
-          onPress={() => {
-            if (isPast) {
-              showMessage('不能選擇過去日期');
-              return;
+        {/* 日期 Grid */}
+        <View style={styles.calendarGrid}>
+          {calendarCells.map((day, index) => {
+            if (!day) {
+              return (
+                <View
+                  key={`calendar-empty-${index}`}
+                  style={styles.calendarCellEmpty}
+                />
+              );
             }
 
-            setCustomDateInput(thisDateStr);
-            setCalendarVisible(false);
-          }}
-        >
-          <Text style={{
-            color: isSelected ? '#fff' : '#333'
-          }}>
-            {day}
-          </Text>
-        </TouchableOpacity>
-      );
-    })}
-  </View>
-</View>
+            const thisDateStr =
+              `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+
+            const isSelected = thisDateStr === customDateInput;
+            const isPast = isPastDate(thisDateStr);
+
+            return (
+              <TouchableOpacity
+                key={`calendar-day-${day}`}
+                style={[
+                  styles.calendarCell,
+                  isSelected && { backgroundColor: '#FF8C42' },
+                  isPast && { opacity: 0.4 }
+                ]}
+                onPress={() => {
+                  if (isPast) {
+                    showMessage('不能選擇過去日期');
+                    return;
+                  }
+
+                  setCustomDateInput(thisDateStr);
+                  setCalendarVisible(false);
+                }}
+              >
+                <Text
+                  style={{
+                    color: isSelected ? '#fff' : '#333',
+                    fontWeight: isSelected ? '800' : '600'
+                  }}
+                >
+                  {day}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
 
       <TouchableOpacity
         onPress={() => setCalendarVisible(false)}
-        style={{ padding: 12, alignItems: 'center' }}
+        style={{
+          padding: 12,
+          alignItems: 'center'
+        }}
       >
         <Text>關閉</Text>
       </TouchableOpacity>
-
     </View>
   </View>
 </Modal>
@@ -8912,19 +9310,22 @@ contentContainerStyle={{
   animationType="fade"
   onRequestClose={() => setSpecialNoticeCalendarVisible(false)}
 >
-  <View style={{
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    padding: 20
-  }}>
-    <View style={{
-      backgroundColor: '#fff',
-      borderRadius: 16,
-      padding: 10
-    }}>
+  <View
+    style={{
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.4)',
+      justifyContent: 'center',
+      padding: 20
+    }}
+  >
+    <View
+      style={{
+        backgroundColor: '#fff',
+        borderRadius: 16,
+        padding: 10
+      }}
+    >
       <View style={styles.calendarContainer}>
-
         {/* Header */}
         <View style={styles.monthSwitcherRow}>
           <TouchableOpacity onPress={handlePrevSpecialNoticeMonth}>
@@ -8949,10 +9350,10 @@ contentContainerStyle={{
           ))}
         </View>
 
-        {/* Grid */}
+        {/* 日期 Grid */}
         <View style={styles.calendarGrid}>
           {specialNoticeCalendarCells.map((day, index) => {
-            if (!day) {
+            if (day === null) {
               return (
                 <View
                   key={`special-date-empty-${index}`}
@@ -8985,10 +9386,12 @@ contentContainerStyle={{
                   setSpecialNoticeCalendarVisible(false);
                 }}
               >
-                <Text style={{
-                  color: isSelected ? '#fff' : '#333',
-                  fontWeight: isSelected ? '800' : '600'
-                }}>
+                <Text
+                  style={{
+                    color: isSelected ? '#fff' : '#333',
+                    fontWeight: isSelected ? '800' : '600'
+                  }}
+                >
                   {day}
                 </Text>
               </TouchableOpacity>
@@ -9013,117 +9416,6 @@ contentContainerStyle={{
     </View>
   </View>
 </Modal>
-{/* 收到的點菜要求 Modal */}
-<Modal
-  animationType="slide"
-  transparent={true}
-  visible={requestInboxVisible && incomingRequests.length > 0}
-  onRequestClose={() => setRequestInboxVisible(false)}
->
-  <View style={styles.modalCentered}>
-    <View style={styles.modalView}>
-      <Text style={styles.modalTitle}>📨 收到的點菜要求</Text>
-
-      {incomingRequests.length === 0 ? (
-        <Text style={styles.label}>目前沒有待處理的點菜要求。</Text>
-      ) : (
-        <ScrollView
-          style={styles.requestInboxScroll}
-          keyboardShouldPersistTaps="handled"
-        >
-          {incomingRequests.map(req => (
-            <View
-              key={req.id}
-              style={styles.requestInboxCard}
-            >
-             <Text style={styles.dishName}>
-  {req.requestType === 'fruit'
-    ? `🍎 ${req.fruitName || req.dishName}`
-    : `🍲 ${req.dishName}`}
-</Text>
-
-              <Text style={styles.dishDetails}>
-                來自：{req.senderNickname || '未知用戶'}
-              </Text>
-
-              <Text style={styles.dishDetails}>
-                日期：{req.date}｜餐別：{req.meal}
-              </Text>
-
-              <Text style={styles.dishDetails}>
-                {req.requestType !== 'fruit' && (
-  <Text style={styles.dishDetails}>
-    材料：{req.ingredients || '未填寫'}
-  </Text>
-)}
-              </Text>
-
-              <View style={styles.requestInboxActionArea}>
- {req.status === 'pending' && (
-  <TouchableOpacity
-    style={[styles.requestInboxActionButton, styles.successActionButton]}
-    onPress={() => handleApproveRequest(req.mergedRequestIds || [req.id])}
-  >
-    <Text style={styles.requestInboxActionText}>
-      ✅ 同意
-    </Text>
-  </TouchableOpacity>
-)}
-
-{req.requestType !== 'fruit' && (
-  <TouchableOpacity
-    style={[styles.requestInboxActionButton, styles.infoActionButton]}
-    onPress={() => openRescheduleModal(req)}
-  >
-    <Text style={styles.requestInboxActionText}>
-      📅 改期並同意
-    </Text>
-  </TouchableOpacity>
-)}
-
-<TouchableOpacity
-  style={[styles.requestInboxActionButton, styles.dangerActionButton]}
-  onPress={() => openRejectModal(req)}
->
-  <Text style={styles.requestInboxActionText}>
-    {req.requestType === 'fruit' ? '❌ 取消' : '❌ 拒絕'}
-  </Text>
-</TouchableOpacity>
-
-                {/* 大廚同意時，是否把材料加入購物清單 */}
-                <TouchableOpacity
-                  style={styles.checkboxRowCompact}
-                  onPress={() => {
-                    const nextValue = approveAddToList === true ? false : true;
-                    setApproveAddToList(nextValue);
-                    setLastApproveAddToList(nextValue);
-                  }}
-                >
-                  <Text style={styles.checkboxIcon}>
-                    {approveAddToList === true ? '✅' : '⬜'}
-                  </Text>
-
-                  <Text style={styles.checkboxLabel}>
-                    同意後將此菜餚食材加入「購物清單」
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))}
-        </ScrollView>
-      )}
-
-      <View style={styles.modalFooterButtonArea}>
-        <Button
-          title="關閉"
-          color="gray"
-          onPress={() => setRequestInboxVisible(false)}
-        />
-      </View>
-    </View>
-  </View>
-</Modal>
-
 {/* 水果想食 Modal */}
 <Modal
   animationType="slide"
@@ -9291,6 +9583,116 @@ contentContainerStyle={{
   </View>
 </Modal>
 
+{/* 收到的點菜要求 Modal */}
+<Modal
+  animationType="slide"
+  transparent={true}
+  visible={requestInboxVisible && incomingRequests.length > 0}
+  onRequestClose={() => setRequestInboxVisible(false)}
+>
+  <View style={styles.modalCentered}>
+    <View style={styles.modalView}>
+      <Text style={styles.modalTitle}>📨 收到的點菜要求</Text>
+
+      {incomingRequests.length === 0 ? (
+        <Text style={styles.label}>目前沒有待處理的點菜要求。</Text>
+      ) : (
+        <ScrollView
+          style={styles.requestInboxScroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          {incomingRequests.map(req => (
+            <View
+              key={req.id}
+              style={styles.requestInboxCard}
+            >
+             <Text style={styles.dishName}>
+  {req.requestType === 'fruit'
+    ? `🍎 ${req.fruitName || req.dishName}`
+    : `🍲 ${req.dishName}`}
+</Text>
+
+              <Text style={styles.dishDetails}>
+                來自：{req.senderNickname || '未知用戶'}
+              </Text>
+
+              <Text style={styles.dishDetails}>
+                日期：{req.date}｜餐別：{req.meal}
+              </Text>
+
+              <Text style={styles.dishDetails}>
+                {req.requestType !== 'fruit' && (
+  <Text style={styles.dishDetails}>
+    材料：{req.ingredients || '未填寫'}
+  </Text>
+)}
+              </Text>
+
+              <View style={styles.requestInboxActionArea}>
+ {req.status === 'pending' && (
+  <TouchableOpacity
+    style={[styles.requestInboxActionButton, styles.successActionButton]}
+    onPress={() => handleApproveRequest(req.mergedRequestIds || [req.id])}
+  >
+    <Text style={styles.requestInboxActionText}>
+      ✅ 同意
+    </Text>
+  </TouchableOpacity>
+)}
+
+{req.requestType !== 'fruit' && (
+  <TouchableOpacity
+    style={[styles.requestInboxActionButton, styles.infoActionButton]}
+    onPress={() => openRescheduleModal(req)}
+  >
+    <Text style={styles.requestInboxActionText}>
+      📅 改期並同意
+    </Text>
+  </TouchableOpacity>
+)}
+
+<TouchableOpacity
+  style={[styles.requestInboxActionButton, styles.dangerActionButton]}
+  onPress={() => openRejectModal(req)}
+>
+  <Text style={styles.requestInboxActionText}>
+    {req.requestType === 'fruit' ? '❌ 取消' : '❌ 拒絕'}
+  </Text>
+</TouchableOpacity>
+
+                {/* 大廚同意時，是否把材料加入購物清單 */}
+                <TouchableOpacity
+                  style={styles.checkboxRowCompact}
+                  onPress={() => {
+                    const nextValue = approveAddToList === true ? false : true;
+                    setApproveAddToList(nextValue);
+                    setLastApproveAddToList(nextValue);
+                  }}
+                >
+                  <Text style={styles.checkboxIcon}>
+                    {approveAddToList === true ? '✅' : '⬜'}
+                  </Text>
+
+                  <Text style={styles.checkboxLabel}>
+                    同意後將此菜餚食材加入「購物清單」
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+      )}
+
+      <View style={styles.modalFooterButtonArea}>
+        <Button
+          title="關閉"
+          color="gray"
+          onPress={() => setRequestInboxVisible(false)}
+        />
+      </View>
+    </View>
+  </View>
+</Modal>
 
 {/* 改期 Modal：一定要放在收到的點菜要求 Modal 後面，才會蓋在最上層 */}
 <Modal
@@ -9674,641 +10076,2157 @@ export default function App() {
 {/* ================= 樣式表 StyleSheet ================= */}
 
 const styles = StyleSheet.create({
-safeRoot: { flex: 1, backgroundColor: '#FFF8F0' },
+safeRoot: {
+  flex: 1,
+  backgroundColor: '#FFF8F0'
+},
+
+  container: {
+    flex: 1,
+    backgroundColor: '#FFF8F0'
+  },
+
+  containerCenter: {
+    flexGrow: 1,
+    backgroundColor: '#FFF8F0',
+    paddingHorizontal: 18,
+    justifyContent: 'center'
+  },
+
+  content: {
+    flex: 1,
+    padding: 15,
+    backgroundColor: '#FFF8F0'
+  },
+
+  pageContent: {
+    paddingBottom: 12
+  },
+
+  authScreen: {
+    flex: 1,
+    backgroundColor: '#FFF8F0'
+  },
+
+  authScroll: {
+    flex: 1,
+    backgroundColor: '#FFF8F0'
+  },
+
+  authContainer: {
+    flexGrow: 1,
+    paddingHorizontal: 18,
+    justifyContent: 'center'
+  },
+
+  authTitleArea: {
+    alignItems: 'center',
+    marginBottom: 18
+  },
+
+  // =====================
+  // Header
+  // =====================
+header: {
+  backgroundColor: '#FF8A65',
+  paddingHorizontal: 14,
+  marginBottom: 12,
+  borderRadius: 14
+},
+
+headerInner: {
+  paddingVertical: 8,
+  alignItems: 'center',
+  justifyContent: 'center'
+},
+
+headerTitle: {
+  fontSize: 18,
+  fontWeight: 'bold',
+  color: '#fff',
+  textAlign: 'center'
+},
+
+  // =====================
+  // 標題文字
+  // =====================
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#4A3B32',
+    marginVertical: 10
+  },
+
+  sectionTitleSmall: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#5A4A42',
+    marginBottom: 10
+  },
+
+  sectionTitleLarge: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#4A3B32',
+    marginBottom: 16,
+    textAlign: 'center'
+  },
+
+  sectionTitleBlock: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#FF7043',
+    marginBottom: 12
+  },
+
+  label: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#5A4A42',
+    marginBottom: 6,
+    marginTop: 6
+  },
+
+  // =====================
+  // 卡片 / 表單
+  // =====================
+  searchSectionCard: {
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    borderRadius: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2
+  },
+
+  formCard: {
+    backgroundColor: '#FFFFFF',
+    padding: 18,
+    borderRadius: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2
+  },
+
+  innerCard: {
+    backgroundColor: '#FFF8F0',
+    padding: 14,
+    borderRadius: 14,
+    marginTop: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  loginBox: {
+    backgroundColor: '#FFFFFF',
+    padding: 18,
+    borderRadius: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  setupCard: {
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    borderRadius: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2
+  },
+
+  cardTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#4A3B32',
+    marginBottom: 10
+  },
+
+  input: {
+    backgroundColor: '#FFF7EC',
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    borderRadius: 12,
+    fontSize: 14,
+    marginBottom: 10,
+    color: '#3F332C',
+    borderWidth: 1,
+    borderColor: '#F2DDC8'
+  },
+
+  // =====================
+  // 通用按鈕語意色
+  // =====================
+  primaryActionButton: {
+    backgroundColor: '#FF8A65'
+  },
+
+  manageActionButton: {
+    backgroundColor: '#9254DE'
+  },
+
+  luckyActionButton: {
+    backgroundColor: '#B45ACB'
+  },
+
+  infoActionButton: {
+    backgroundColor: '#3BB8B8'
+  },
+
+  successActionButton: {
+    backgroundColor: '#58B368'
+  },
+
+  completeActionButton: {
+    backgroundColor: '#58B368'
+  },
+
+  restoreActionButton: {
+    backgroundColor: '#58B368'
+  },
+
+  warningActionButton: {
+    backgroundColor: '#FAAD14'
+  },
+
+  dangerActionButton: {
+    backgroundColor: '#E85D75'
+  },
+
+  neutralActionButton: {
+    backgroundColor: '#A89A8E'
+  },
+
+  clearActionButton: {
+    backgroundColor: '#A89A8E'
+  },
+
+  cancelActionButton: {
+    backgroundColor: '#A89A8E'
+  },
+
+  disabledActionButton: {
+    backgroundColor: '#D8CEC3'
+  },
+
+  softCancelButton: {
+    backgroundColor: '#8FA6B2',
+    borderWidth: 1,
+    borderColor: '#D8C5B3'
+  },
+
+  softCancelButtonText: {
+    color: '#6F6258',
+    fontWeight: 'bold'
+  },
+
+  buttonTextWhite: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  buttonTextDark: {
+    color: '#6F6258',
+    fontWeight: 'bold'
+  },
+
+  buttonTextDanger: {
+    color: '#E85D75',
+    fontWeight: 'bold'
+  },
+
+  buttonTextSuccess: {
+    color: '#58B368',
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 登入 / 註冊 / 主按鈕
+  // =====================
+  mainActionBtn: {
+    width: '100%',
+    paddingVertical: 15,
+    borderRadius: 14,
+    backgroundColor: '#3BB8B8',
+    alignItems: 'center',
+    marginTop: 12
+  },
+
+  mainActionBtnAlt: {
+    width: '100%',
+    paddingVertical: 15,
+    borderRadius: 14,
+    backgroundColor: '#3BB8B8',
+    alignItems: 'center',
+    marginTop: 12
+  },
+
+  mainActionText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold'
+  },
+
+  switchStageLink: {
+    marginTop: 14,
+    alignItems: 'center'
+  },
+
+  switchStageText: {
+    color: '#FF7043',
+    fontSize: 14,
+    fontWeight: '600'
+  },
+switchToRegisterText: {
+  color: '#3BB8B8',
+  fontSize: 14,
+  textDecorationLine: 'underline'
+},
+
+switchToLoginText: {
+  color: '#3BB8B8',
+  fontSize: 14,
+  textDecorationLine: 'underline'
+},
+  primaryButton: {
+    backgroundColor: '#3BB8B8',
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+    marginTop: 8
+  },
+
+  buttonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 抽籤按鈕
+  // =====================
+  luckyDrawButton: {
+    backgroundColor: '#d18de3',
+    paddingVertical: 15,
+    paddingHorizontal: 16,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3
+  },
+
+  luckyDrawButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center'
+  },
+
+  // =====================
+  // 首頁 toolbar / action buttons
+  // =====================
+  toolbarRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12
+  },
+
+  smallActionButton: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    alignItems: 'center'
+  },
+
+  smallActionButtonText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 分類 / 標籤
+  // =====================
+  categoryBlock: {
+    borderBottomWidth: 1,
+    borderColor: '#F4E5D8',
+    paddingVertical: 9
+  },
+
+  accordionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+
+  categoryLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#4A3B32'
+  },
+
+  searchHintText: {
+    fontSize: 12,
+    color: '#9B8A7D'
+  },
+
+  categoryContent: {
+    marginTop: 6
+  },
+
+  subCategoryBlock: {
+    marginLeft: 10,
+    marginTop: 6
+  },
+
+  subCategoryLabel: {
+    fontSize: 12,
+    color: '#7A6B60',
+    fontWeight: '600',
+    marginBottom: 4
+  },
+
+  tagContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginVertical: 6
+  },
+
+  tagButtonBig: {
+    backgroundColor: '#FFF7EC',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    marginRight: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#F2DDC8'
+  },
+
+  tagButtonSelected: {
+    backgroundColor: '#FF8A65',
+    borderColor: '#FF8A65'
+  },
+
+  tagTextBig: {
+    fontSize: 12,
+    color: '#4A3B32'
+  },
+
+  // =====================
+  // 家庭菜餚庫
+  // =====================
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+    marginBottom: 6
+  },
+
+  editToggleButton: {
+    backgroundColor: '#FAAD14',
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 12
+  },
+
+  editToggleButtonActive: {
+    backgroundColor: '#58B368'
+  },
+
+  editToggleButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 12
+  },
+
+  editToolbar: {
+    backgroundColor: '#FFF7EC',
+    padding: 12,
+    borderRadius: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#F2DDC8'
+  },
+
+  editToolbarHint: {
+    fontSize: 12,
+    color: '#7A6B60',
+    marginBottom: 8
+  },
+
+  editToolbarButtonGroup: {
+    marginTop: 4
+  },
+
+  editToolbarRow: {
+    flexDirection: 'row'
+  },
+
+  editMainActionButton: {
+    flex: 1,
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center'
+  },
+
+  editMainActionText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  clearSelectionButton: {
+    backgroundColor: '#A89A8E',
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    minWidth: 80
+  },
+
+  clearSelectionText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  hiddenManageButton: {
+    backgroundColor: '#9254DE',
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 10
+  },
+
+  hiddenManageButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  dishCardSelectable: {
+    backgroundColor: '#FFFFFF',
+    padding: 15,
+    borderRadius: 18,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2
+  },
+
+  dishCardSelected: {
+    borderWidth: 2,
+    borderColor: '#3BB8B8',
+    backgroundColor: '#F0FDFA'
+  },
+
+  dishCardRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start'
+  },
+
+  dishCardContent: {
+    flex: 1
+  },
+
+  dishCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start'
+  },
+
+  dishName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#3F332C',
+    flexShrink: 1
+  },
+
+  dishDetails: {
+    fontSize: 13,
+    color: '#6F6258',
+    marginTop: 6,
+    lineHeight: 19
+  },
+
+  clickHint: {
+    fontSize: 12,
+    color: '#FF7043',
+    marginTop: 8,
+    fontWeight: 'bold'
+  },
+
+  dishStatusText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    marginLeft: 8
+  },
+
+  dishStatusApproved: {
+    color: '#58B368'
+  },
+
+  dishStatusPending: {
+    color: '#FAAD14'
+  },
+
+  dishStatusPrivate: {
+    color: '#1890FF'
+  },
+
+  checkboxBox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#B8A89A',
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+    marginTop: 2
+  },
+
+  checkboxBoxSelected: {
+    borderColor: '#3BB8B8',
+    backgroundColor: '#3BB8B8'
+  },
+
+  checkboxTick: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 16,
+    lineHeight: 18
+  },
+
+  // =====================
+  // 月曆
+  // =====================
+  monthSwitcherRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15
+  },
+
+  switchMonthText: {
+    color: '#FF7043',
+    fontWeight: 'bold'
+  },
+
+  monthTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#4A3B32'
+  },
+
+  calendarContainer: {
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    borderRadius: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  calendarHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 6
+  },
+
+  calendarHeaderCell: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#9B8A7D',
+    width: '14%',
+    textAlign: 'center'
+  },
+
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap'
+  },
+
+  calendarCell: {
+    width: '14.28%',
+    height: 45,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginVertical: 2,
+    borderRadius: 10
+  },
+
+  calendarCellEmpty: {
+    width: '14.28%',
+    height: 45
+  },
+
+  calendarCellToday: {
+    backgroundColor: '#FFF0E8',
+    borderWidth: 1,
+    borderColor: '#FF8A65'
+  },
+
+  calendarCellApproved: {
+    backgroundColor: '#58B368'
+  },
+
+  calendarCellCompleted: {
+    backgroundColor: '#A89A8E'
+  },
+
+  calendarCellPast: {
+    backgroundColor: '#EFE7DD',
+    opacity: 0.65
+  },
+
+  calendarDayNum: {
+    fontSize: 14,
+    color: '#3F332C'
+  },
+
+  calendarDayNumHasEvent: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  calendarDayNumToday: {
+    color: '#FF7043',
+    fontWeight: 'bold'
+  },
+
+  calendarDayNumPast: {
+    color: '#AAA'
+  },
+
+  calendarDotWhite: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#fff',
+    marginTop: 2
+  },
+
+  dotMini: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#fff',
+    marginTop: 2
+  },
+
+  // =====================
+  // 排餐 request card
+  // =====================
+  requestCard: {
+    backgroundColor: '#FFFFFF',
+    padding: 15,
+    borderRadius: 18,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  requestCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+  },
+
+  requestMetaText: {
+    marginTop: 6,
+    color: '#4A3B32',
+    fontSize: 13
+  },
+
+  requestMetaTextBottom: {
+    marginTop: 4,
+    marginBottom: 8,
+    color: '#4A3B32',
+    fontSize: 13
+  },
+
+  requestMetaStrong: {
+    fontWeight: 'bold'
+  },
+
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    fontSize: 12,
+    overflow: 'hidden',
+    fontWeight: 'bold'
+  },
+
+  statusBadgeApproved: {
+    backgroundColor: '#EAF8EE',
+    color: '#58B368'
+  },
+
+  statusBadgeRejected: {
+    backgroundColor: '#FFF1F0',
+    color: '#E85D75'
+  },
+
+  statusBadgePending: {
+    backgroundColor: '#FFF7E6',
+    color: '#FA8C16'
+  },
+
+  timeHighlight: {
+    color: '#FF7043',
+    fontWeight: 'bold'
+  },
+
+  actionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 10
+  },
+
+  actionBtn: {
+    flex: 1,
+    padding: 8,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginHorizontal: 3
+  },
+
+  actionBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 13
+  },
+
+  waitingReviewText: {
+    fontSize: 12,
+    color: '#9B8A7D',
+    fontStyle: 'italic',
+    marginTop: 6
+  },
+
+  // =====================
+  // 新增菜式
+  // =====================
+  recommendBox: {
+    backgroundColor: '#FFF1F0',
+    padding: 10,
+    borderRadius: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#FFD6D0'
+  },
+
+  recommendWarningText: {
+    color: '#E85D75',
+    fontSize: 12,
+    fontWeight: 'bold'
+  },
+
+  recommendItemText: {
+    fontSize: 12,
+    color: '#6F6258',
+    marginTop: 2
+  },
+
+  formSectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 6
+  },
+
+  inlineManageButton: {
+    backgroundColor: '#3BB8B8',
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 10
+  },
+
+  inlineManageButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold'
+  },
+
+  addCategoryBlock: {
+    marginBottom: 8
+  },
+
+  addSubCategoryBlock: {
+    marginLeft: 10,
+    marginBottom: 5
+  },
+
+  miniCategoryLabel: {
+    fontSize: 11,
+    color: '#9B8A7D',
+    fontWeight: 'bold'
+  },
+
+  miniSelectBtn: {
+    backgroundColor: '#FFF7EC',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    marginRight: 6,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#F2DDC8'
+  },
+
+  miniSelectBtnActive: {
+    backgroundColor: '#FF8A65',
+    borderColor: '#FF8A65'
+  },
+
+  miniSelectBtnText: {
+    fontSize: 11,
+    color: '#4A3B32'
+  },
+
+  miniSelectBtnTextActive: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  permissionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between'
+  },
+
+  permissionRowSpaced: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 15
+  },
+
+  permBtn: {
+    flex: 1,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#F2DDC8',
+    borderRadius: 12,
+    alignItems: 'center',
+    marginHorizontal: 5,
+    backgroundColor: '#FFF7EC'
+  },
+
+  permBtnActive: {
+    borderColor: '#FF8A65',
+    backgroundColor: '#FFF0E8'
+  },
+
+  permBtnText: {
+    fontSize: 13,
+    color: '#4A3B32',
+    fontWeight: '600'
+  },
+
+  submitDishBtn: {
+    backgroundColor: '#58B368',
+    padding: 15,
+    borderRadius: 14,
+    alignItems: 'center',
+    marginTop: 15
+  },
+
+  submitDishBtnText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 購物清單
+  // =====================
+  shoppingInputRow: {
+    flexDirection: 'row',
+    marginBottom: 10
+  },
+
+  shoppingInput: {
+    flex: 1,
+    marginBottom: 0
+  },
+
+  confirmBtnReal: {
+    backgroundColor: '#3BB8B8',
+    justifyContent: 'center',
+    paddingHorizontal: 15,
+    borderRadius: 12,
+    marginLeft: 6
+  },
+
+  confirmBtnRealText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  emptyShoppingText: {
+    textAlign: 'center',
+    color: '#9B8A7D',
+    marginVertical: 20
+  },
+
+  shoppingItemRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderColor: '#F4E5D8',
+    alignItems: 'center'
+  },
+
+  shoppingItemMain: {
+    flex: 1
+  },
+
+  shoppingItemText: {
+    color: '#3F332C',
+    fontSize: 14
+  },
+
+  shoppingItemTextChecked: {
+    textDecorationLine: 'line-through',
+    color: '#9B8A7D'
+  },
+
+  shoppingDeleteButton: {
+    paddingLeft: 10
+  },
+
+  shoppingDeleteText: {
+    color: '#58B368',
+    fontSize: 16
+  },
+
+  // =====================
+  // 個人設定 / 成員
+  // =====================
+  profileText: {
+    fontSize: 15,
+    marginVertical: 6,
+    color: '#3F332C'
+  },
+
+  profileHighlightText: {
+    fontWeight: 'bold',
+    color: '#FF7043'
+  },
+
+  profileStrongText: {
+    fontWeight: 'bold',
+    color: '#3F332C'
+  },
+
+  profileEditButton: {
+    backgroundColor: '#3BB8B8',
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: 'center',
+    marginTop: 8
+  },
+
+  profileEditButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  formButtonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 15
+  },
+
+  groupCodeText: {
+    fontSize: 12,
+    color: '#7A6B60',
+    marginBottom: 10
+  },
+
+  memberRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  memberInfoArea: {
+    flex: 1
+  },
+
+  memberActionArea: {
+    alignItems: 'flex-end'
+  },
+
+  memberNameText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#3F332C'
+  },
+
+  memberRoleText: {
+    fontSize: 12,
+    color: '#7A6B60',
+    marginTop: 2
+  },
+
+  memberRoleCookText: {
+    color: '#58B368',
+    fontWeight: 'bold'
+  },
+
+  memberGroupRoleText: {
+    fontSize: 12,
+    color: '#B8A89A',
+    fontStyle: 'italic',
+    marginBottom: 6
+  },
+
+  deleteMemberBtn: {
+    backgroundColor: '#FFF1F0',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FFD6D0',
+    marginBottom: 6
+  },
+
+  deleteMemberBtnText: {
+    color: '#E85D75',
+    fontSize: 12,
+    fontWeight: '600'
+  },
+
+  memberAdminToggleOffButton: {
+    backgroundColor: '#F0F0F0',
+    borderColor: '#D9D9D9'
+  },
+
+  memberAdminToggleOnButton: {
+    backgroundColor: '#E6FFFB',
+    borderColor: '#87E8DE'
+  },
+
+  logoutButton: {
+    width: '100%',
+    paddingVertical: 15,
+    borderRadius: 14,
+    backgroundColor: '#E85D75',
+    alignItems: 'center',
+    marginTop: 12
+  },
+
+  deleteAccountButton: {
+    width: '100%',
+    paddingVertical: 15,
+    borderRadius: 14,
+    backgroundColor: '#A89A8E',
+    alignItems: 'center',
+    marginTop: 12
+  },
+
+  // =====================
+  // 角色 / 群組 setup
+  // =====================
+  roleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between'
+  },
+
+  roleSelectBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F2DDC8',
+    alignItems: 'center',
+    marginHorizontal: 5,
+    backgroundColor: '#FFF7EC'
+  },
+
+  roleSelectBtnActive: {
+    borderColor: '#FF8A65',
+    backgroundColor: '#FFF0E8'
+  },
+
+  roleBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#4A3B32'
+  },
+
+  // =====================
+  // Modal 基礎
+  // =====================
+  modalCentered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(63, 51, 44, 0.45)'
+  },
+
+  modalView: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    width: '86%',
+    maxHeight: '88%',
+    alignItems: 'center',
+    elevation: 5,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    color: '#3F332C',
+    textAlign: 'center'
+  },
+
+  modalContentFull: {
+    width: '100%'
+  },
+
+  modalStrongText: {
+    fontWeight: 'bold',
+    color: '#3F332C'
+  },
+
+  modalDescriptionText: {
+    fontSize: 13,
+    color: '#6F6258',
+    marginBottom: 10,
+    lineHeight: 20
+  },
+
+  modalDangerHintText: {
+    fontSize: 12,
+    color: '#E85D75',
+    marginTop: 6,
+    lineHeight: 18
+  },
+
+  modalHintText: {
+    fontSize: 12,
+    color: '#9B8A7D',
+    marginTop: 4,
+    lineHeight: 18
+  },
+
+  modalButtonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 15,
+    width: '100%'
+  },
+
+  modalBtn: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginHorizontal: 5
+  },
+
+  modalBtnText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  modalCancelButton: {
+    backgroundColor: '#A89A8E'
+  },
+
+  modalPrimaryButton: {
+    backgroundColor: '#FF8A65'
+  },
+
+  modalFooterButtonArea: {
+    marginTop: 12,
+    width: '100%'
+  },
+
+  emptyModalText: {
+    fontSize: 14,
+    color: '#7A6B60',
+    marginTop: 10,
+    textAlign: 'center'
+  },
+
+  // =====================
+  // Dropdown / checkbox
+  // =====================
+  dropdownHeader: {
+    backgroundColor: '#FFF7EC',
+    padding: 11,
+    borderRadius: 12,
+    width: '100%',
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#F2DDC8'
+  },
+
+  dropdownHeaderText: {
+    fontSize: 14,
+    color: '#3F332C'
+  },
+
+  dropdownPlaceholderText: {
+    color: '#9B8A7D'
+  },
+
+  dropdownList: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    borderRadius: 12,
+    width: '100%',
+    marginBottom: 10,
+    overflow: 'hidden'
+  },
+
+  dropdownItem: {
+    padding: 11,
+    borderBottomWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  dropdownItemText: {
+    fontSize: 14,
+    color: '#3F332C'
+  },
+
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 15
+  },
+
+  checkboxRowCompact: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    marginBottom: 4
+  },
+
+  checkboxIcon: {
+    fontSize: 16
+  },
+
+  checkboxLabel: {
+    marginLeft: 8,
+    fontSize: 14,
+    color: '#5A4A42',
+    flex: 1
+  },
+
+  // =====================
+  // 已隱藏菜式 Modal
+  // =====================
+  hiddenDishesModalView: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    width: '86%',
+    maxHeight: '85%',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  hiddenDishesScroll: {
+    width: '100%',
+    maxHeight: 420
+  },
+
+  hiddenDishCard: {
+    borderWidth: 1,
+    borderColor: '#D9F7BE',
+    backgroundColor: '#FCFFF5',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10
+  },
+
+  restoreDishButton: {
+    backgroundColor: '#58B368',
+    padding: 9,
+    borderRadius: 12,
+    marginTop: 9,
+    alignItems: 'center'
+  },
+
+  restoreDishButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 收到點菜 / 大廚通知
+  // =====================
+  requestInboxScroll: {
+    width: '100%',
+    maxHeight: 360
+  },
+
+  requestInboxCard: {
+    borderWidth: 1,
+    borderColor: '#F4E5D8',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    backgroundColor: '#fff'
+  },
+
+  requestInboxActionArea: {
+    marginTop: 10
+  },
+
+  requestInboxActionButton: {
+    padding: 10,
+    borderRadius: 12,
+    marginBottom: 8,
+    alignItems: 'center'
+  },
+
+  requestInboxActionText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  senderNotificationScroll: {
+    width: '100%',
+    maxHeight: 360
+  },
+
+  senderNotificationCard: {
+    borderWidth: 1,
+    borderColor: '#FFE58F',
+    backgroundColor: '#FFFBE6',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10
+  },
+
+  cookMessageText: {
+    fontSize: 13,
+    color: '#5A4A42',
+    marginTop: 12,
+    lineHeight: 22
+  },
+
+  acknowledgeButton: {
+    backgroundColor: '#58B368',
+    padding: 9,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 10
+  },
+
+  acknowledgeButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // 改期 meal chips
+  // =====================
+  mealOptionWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10
+  },
+
+  mealOptionChip: {
+    backgroundColor: '#EFE7DD',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    marginRight: 8,
+    marginBottom: 8
+  },
+
+  mealOptionChipSelected: {
+    backgroundColor: '#3BB8B8'
+  },
+
+  mealOptionChipText: {
+    color: '#4A3B32',
+    fontWeight: 'bold'
+  },
+
+  mealOptionChipTextSelected: {
+    color: '#fff'
+  },
+
+  // =====================
+  // Bottom Sheet 管理標籤
+  // =====================
+  bottomSheetOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(63, 51, 44, 0.45)',
+    justifyContent: 'flex-end'
+  },
+
+  bottomSheetContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    maxHeight: '86%',
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  bottomSheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 18,
+    borderBottomWidth: 1,
+    borderColor: '#F4E5D8',
+    paddingBottom: 10
+  },
+
+  bottomSheetTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#3F332C'
+  },
+
+  bottomSheetCloseButton: {
+    padding: 5
+  },
+
+  bottomSheetCloseText: {
+    fontSize: 20,
+    color: '#9B8A7D',
+    fontWeight: 'bold'
+  },
+
+  bottomSheetScroll: {
+    width: '100%'
+  },
+
+  tagManagerSection: {
+    marginBottom: 20,
+    padding: 12,
+    backgroundColor: '#FFF8F0',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  tagManagerSectionTitleBlue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#13A8A8',
+    marginBottom: 8
+  },
+
+  tagManagerSectionTitlePink: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#E85D75',
+    marginBottom: 8
+  },
+
+  modalCategoryPickerArea: {
+    marginTop: 12
+  },
+
+  modalSmallHintText: {
+    fontSize: 12,
+    color: '#6F6258',
+    marginBottom: 8
+  },
+
+  modalCategoryChipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap'
+  },
+
+  modalCategoryChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#F2DDC8',
+    borderRadius: 10,
+    marginRight: 8,
+    marginBottom: 8,
+    backgroundColor: '#fff'
+  },
+
+  modalCategoryChipSelected: {
+    backgroundColor: '#E85D75',
+    borderColor: '#E85D75'
+  },
+
+  modalCategoryChipText: {
+    fontSize: 12,
+    color: '#4A3B32'
+  },
+
+  modalCategoryChipTextSelected: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+moreCategoryToggleButton: {
+  paddingHorizontal: 12,
+  paddingVertical: 7,
+  backgroundColor: '#D99A5C',
+  borderRadius: 18,
+  marginRight: 8,
+  marginBottom: 8,
+  alignItems: 'center',
+  justifyContent: 'center'
+},
+
+moreCategoryToggleText: {
+  fontSize: 12,
+  color: '#fff',
+  fontWeight: 'bold'
+},
+
+  modalSubCategoryBox: {
+    marginTop: 8,
+    padding: 8,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F4E5D8'
+  },
+
+  modalSubCategoryHint: {
+    fontSize: 11,
+    color: '#8C7C70',
+    marginBottom: 6
+  },
+
+  modalSubCategoryChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: '#F2DDC8',
+    borderRadius: 8,
+    marginRight: 6,
+    marginBottom: 6,
+    backgroundColor: '#FFF7EC'
+  },
+
+  modalSubCategoryChipSelected: {
+    backgroundColor: '#FA8C16',
+    borderColor: '#FA8C16'
+  },
+
+  modalSubCategoryChipText: {
+    fontSize: 11,
+    color: '#6F6258'
+  },
+
+  modalSubCategoryChipTextSelected: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+bottomSheetCancelButton: {
+  flex: 1,
+  backgroundColor: '#A89A8E',
+  padding: 12,
+  borderRadius: 14,
+  alignItems: 'center',
+  marginRight: 10
+},
+
+bottomSheetCancelButtonText: {
+  color: '#fff',
+  fontWeight: 'bold',
+  fontSize: 14
+},
+
+  modalCancelButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  modalSaveButton: {
+    flex: 2,
+    backgroundColor: '#58B368',
+    padding: 12,
+    borderRadius: 14,
+    alignItems: 'center'
+  },
+
+  modalSaveButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 15
+  },
+
+  customEditSection: {
+    marginTop: 8,
+    marginBottom: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#F4E5D8',
+    paddingTop: 12
+  },
+
+  customEditToggleButton: {
+    backgroundColor: '#FAAD14',
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 10
+  },
+
+  customEditToggleButtonActive: {
+    backgroundColor: '#9254DE'
+  },
+
+  customEditToggleText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  customEditHintText: {
+    fontSize: 13,
+    color: '#6F6258',
+    marginBottom: 8,
+    lineHeight: 20
+  },
+
+  customCategoryTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#13A8A8',
+    marginTop: 8,
+    marginBottom: 6
+  },
+
+  customTagTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#E85D75',
+    marginTop: 14,
+    marginBottom: 6
+  },
+
+  customEmptyText: {
+    fontSize: 13,
+    color: '#9B8A7D',
+    fontStyle: 'italic',
+    marginBottom: 8
+  },
+
+  customManageRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F4E5D8'
+  },
+
+  customManageRowMain: {
+    flex: 1,
+    marginRight: 8
+  },
+
+  customManageNameText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#3F332C'
+  },
+
+  customManageMetaText: {
+    fontSize: 11,
+    color: '#7A6B60',
+    marginTop: 2
+  },
+
+  customManageStateText: {
+    fontSize: 12,
+    color: '#9B8A7D'
+  },
+
+  customManageStateTextSelected: {
+    color: '#E85D75',
+    fontWeight: 'bold'
+  },
+
+  bulkDeleteButton: {
+    backgroundColor: '#E85D75',
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 14
+  },
+
+  bulkDeleteButtonDisabled: {
+    backgroundColor: '#D8CEC3'
+  },
+
+  bulkDeleteButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  finishEditButton: {
+    backgroundColor: '#58B368',
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 10
+  },
+
+  finishEditButtonText: {
+    color: '#fff',
+    fontWeight: 'bold'
+  },
+
+  // =====================
+  // TabBar
+  // =====================
+  tabBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#F4E5D8',
+    paddingTop: 6,
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: -2 },
+    zIndex: 999
+  },
+
+  tabItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginHorizontal: 2
+  },
+
+  tabItemActive: {
+    backgroundColor: '#FFF0E8'
+  },
+
+  tabIcon: {
+    fontSize: 20,
+    marginBottom: 2
+  },
+
+  tabText: {
+    fontSize: 11,
+    color: '#7A6B60'
+  },
+
+  tabTextActive: {
+    color: '#FF7043',
+    fontWeight: 'bold'
+  },
+  profileInfoBox: {
+  backgroundColor: '#FFF8F0',
+  borderWidth: 1,
+  borderColor: '#F4E5D8',
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 12
+},
+
+profileEditButtonRow: {
+  flexDirection: 'row',
+  marginTop: 14
+},
+
+profileCancelButton: {
+  flex: 1,
+  backgroundColor: '#A89A8E',
+  paddingVertical: 12,
+  borderRadius: 14,
+  alignItems: 'center',
+  marginRight: 8
+},
+
+profileCancelButtonText: {
+  color: '#fff',
+  fontWeight: 'bold'
+},
+
+profileSaveButton: {
+  flex: 2,
+  backgroundColor: '#58B368',
+  paddingVertical: 12,
+  borderRadius: 14,
+  alignItems: 'center'
+},
+
+profileSaveButtonText: {
+  color: '#fff',
+  fontWeight: 'bold'
+},
+
+memberCard: {
+  backgroundColor: '#FFF8F0',
+  borderWidth: 1,
+  borderColor: '#F4E5D8',
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 10
+},
+
+memberTopRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start'
+},
+
+memberButtonRow: {
+  flexDirection: 'row',
+  marginTop: 10
+},
+
+memberSmallButton: {
+  flex: 1,
+  paddingVertical: 8,
+  borderRadius: 12,
+  alignItems: 'center',
+  marginRight: 8,
+  borderWidth: 1
+},
+
+memberSmallButtonText: {
+  fontSize: 12,
+  fontWeight: 'bold',
+  color: '#3F332C'
+},
+
+memberRemoveButton: {
+  backgroundColor: '#FFF1F0',
+  borderColor: '#FFD6D0',
+  marginRight: 0
+},
+
+memberRemoveButtonText: {
+  fontSize: 12,
+  fontWeight: 'bold',
+  color: '#E85D75'
+},
+profileSectionHeaderRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  marginBottom: 8
+},
+
+profileInfoBox: {
+  backgroundColor: '#FFF8F0',
+  borderWidth: 1,
+  borderColor: '#F4E5D8',
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 12
+},
+
+profileEditButtonRow: {
+  flexDirection: 'row',
+  marginTop: 14
+},
+
+profileCancelButton: {
+  flex: 1,
+  backgroundColor: '#A89A8E',
+  paddingVertical: 12,
+  borderRadius: 14,
+  alignItems: 'center',
+  marginRight: 8
+},
+
+profileCancelButtonText: {
+  color: '#fff',
+  fontWeight: 'bold'
+},
+
+profileSaveButton: {
+  flex: 2,
+  backgroundColor: '#58B368',
+  paddingVertical: 12,
+  borderRadius: 14,
+  alignItems: 'center'
+},
+
+profileSaveButtonText: {
+  color: '#fff',
+  fontWeight: 'bold'
+},
+
+groupCodeCopyBox: {
+  backgroundColor: '#FFF7EC',
+  borderWidth: 1,
+  borderColor: '#F2DDC8',
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 12
+},
+
+memberManageToggleButton: {
+  backgroundColor: '#FAAD14',
+  paddingVertical: 7,
+  paddingHorizontal: 12,
+  borderRadius: 12
+},
+
+memberManageToggleButtonActive: {
+  backgroundColor: '#58B368'
+},
+
+memberManageToggleButtonText: {
+  color: '#fff',
+  fontSize: 12,
+  fontWeight: 'bold'
+},
+
+memberCard: {
+  backgroundColor: '#FFF8F0',
+  borderWidth: 1,
+  borderColor: '#F4E5D8',
+  borderRadius: 14,
+  padding: 12,
+  marginBottom: 10
+},
+
+memberTopRow: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start'
+},
+
+memberButtonRow: {
+  flexDirection: 'row',
+  marginTop: 10
+},
+
+memberSmallButton: {
+  flex: 1,
+  paddingVertical: 8,
+  borderRadius: 12,
+  alignItems: 'center',
+  marginRight: 8,
+  borderWidth: 1
+},
+
+memberSmallButtonText: {
+  fontSize: 12,
+  fontWeight: 'bold',
+  color: '#3F332C'
+},
+
+memberRemoveButton: {
+  backgroundColor: '#FFF1F0',
+  borderColor: '#FFD6D0',
+  marginRight: 0
+},
+
+memberRemoveButtonText: {
+  fontSize: 12,
+  fontWeight: 'bold',
+  color: '#E85D75'
+},
+scrollTopButton: {
+  position: 'absolute',
+  bottom: 120,
+  right: 20,
+  backgroundColor: '#FF8C42',
+  width: 48,
+  height: 48,
+  borderRadius: 24,
+  justifyContent: 'center',
+  alignItems: 'center',
+  elevation: 5
+},
+
+scrollTopText: {
+  color: '#fff',
+  fontSize: 18,
+  fontWeight: 'bold'
+},
+subTabContainer: {
+  flexDirection: 'row',
+  backgroundColor: '#FFF3E8',
+  borderRadius: 999,
+  padding: 4,
+  marginBottom: 14,
+  borderWidth: 1,
+  borderColor: '#F3D2B8',
+},
+
+subTabButton: {
+  flex: 1,
+  paddingVertical: 8,
+  paddingHorizontal: 10,
+  borderRadius: 999,
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+
+subTabButtonActive: {
+  backgroundColor: '#FFFFFF',
+  shadowColor: '#000',
+  shadowOpacity: 0.06,
+  shadowRadius: 4,
+  shadowOffset: { width: 0, height: 2 },
+  elevation: 2,
+},
+
+subTabButtonText: {
+  fontSize: 14,
+  fontWeight: '600',
+  color: '#A66A3F',
+},
 
-container: { flex: 1, backgroundColor: '#FFF8F0' },
-
-containerCenter: { flexGrow: 1, backgroundColor: '#FFF8F0', paddingHorizontal: 18, justifyContent: 'center' },
-
-content: { flex: 1, padding: 15, backgroundColor: '#FFF8F0' },
-
-pageContent: { paddingBottom: 12 },
-
-authScreen: { flex: 1, backgroundColor: '#FFF8F0' },
-
-authScroll: { flex: 1, backgroundColor: '#FFF8F0' },
-
-authContainer: { flexGrow: 1, paddingHorizontal: 18, justifyContent: 'center' },
-
-authTitleArea: { alignItems: 'center', marginBottom: 18 },
-
-// =====================
-// Header
-// =====================
-header: { backgroundColor: '#FF8A65', paddingHorizontal: 14, marginBottom: 12, borderRadius: 14 },
-
-headerInner: { paddingVertical: 8, alignItems: 'center', justifyContent: 'center' },
-
-headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff', textAlign: 'center' },
-
-// =====================
-// 標題文字
-// =====================
-sectionTitle: { fontSize: 16, fontWeight: 'bold', color: '#4A3B32', marginVertical: 10 },
-
-sectionTitleSmall: { fontSize: 14, fontWeight: 'bold', color: '#5A4A42', marginBottom: 10 },
-
-sectionTitleLarge: { fontSize: 20, fontWeight: 'bold', color: '#4A3B32', marginBottom: 16, textAlign: 'center' },
-
-sectionTitleBlock: { fontSize: 16, fontWeight: 'bold', color: '#FF7043', marginBottom: 12 },
-
-label: { fontSize: 14, fontWeight: 'bold', color: '#5A4A42', marginBottom: 6, marginTop: 6 },
-
-// =====================
-// 卡片 / 表單
-// =====================
-searchSectionCard: { backgroundColor: '#FFFFFF', padding: 16, borderRadius: 18, marginBottom: 16, borderWidth: 1, borderColor: '#F4E5D8', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
-
-formCard: { backgroundColor: '#FFFFFF', padding: 18, borderRadius: 18, marginBottom: 16, borderWidth: 1, borderColor: '#F4E5D8', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 2 },
-
-innerCard: { backgroundColor: '#FFF8F0', padding: 14, borderRadius: 14, marginTop: 12, marginBottom: 12, borderWidth: 1, borderColor: '#F4E5D8' },
-
-loginBox: { backgroundColor: '#FFFFFF', padding: 18, borderRadius: 18, marginBottom: 16, borderWidth: 1, borderColor: '#F4E5D8' },
-
-setupCard: { backgroundColor: '#FFFFFF', padding: 16, borderRadius: 18, marginBottom: 16, borderWidth: 1, borderColor: '#F4E5D8', shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-
-cardTitle: { fontSize: 15, fontWeight: 'bold', color: '#4A3B32', marginBottom: 10 },
-
-input: { backgroundColor: '#FFF7EC', paddingHorizontal: 13, paddingVertical: 11, borderRadius: 12, fontSize: 14, marginBottom: 10, color: '#3F332C', borderWidth: 1, borderColor: '#F2DDC8' },
-
-// =====================
-// 通用按鈕語意色
-// =====================
-primaryActionButton: { backgroundColor: '#FF8A65' },
-
-manageActionButton: { backgroundColor: '#9254DE' },
-
-luckyActionButton: { backgroundColor: '#B45ACB' },
-
-infoActionButton: { backgroundColor: '#3BB8B8' },
-
-successActionButton: { backgroundColor: '#58B368' },
-
-
-completeActionButton: { backgroundColor: '#58B368' },
-
-restoreActionButton: { backgroundColor: '#58B368' },
-
-warningActionButton: { backgroundColor: '#FAAD14' },
-
-dangerActionButton: { backgroundColor: '#E85D75' },
-
-neutralActionButton: { backgroundColor: '#A89A8E' },
-
-clearActionButton: { backgroundColor: '#A89A8E' },
-
-cancelActionButton: { backgroundColor: '#A89A8E' },
-
-disabledActionButton: { backgroundColor: '#D8CEC3' },
-
-softCancelButton: { backgroundColor: '#8FA6B2', borderWidth: 1, borderColor: '#D8C5B3' },
-
-softCancelButtonText: { color: '#6F6258', fontWeight: 'bold' },
-
-buttonTextWhite: { color: '#fff', fontWeight: 'bold' },
-
-buttonTextDark: { color: '#6F6258', fontWeight: 'bold' },
-
-buttonTextDanger: { color: '#E85D75', fontWeight: 'bold' },
-
-buttonTextSuccess: { color: '#58B368', fontWeight: 'bold' },
-
-// =====================
-// 登入 / 註冊 / 主按鈕
-// =====================
-mainActionBtn: { width: '100%', paddingVertical: 15, borderRadius: 14, backgroundColor: '#3BB8B8', alignItems: 'center', marginTop: 12 },
-
-mainActionBtnAlt: { width: '100%', paddingVertical: 15, borderRadius: 14, backgroundColor: '#3BB8B8', alignItems: 'center', marginTop: 12 },
-
-mainActionText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-
-switchStageLink: { marginTop: 14, alignItems: 'center' },
-
-switchStageText: { color: '#FF7043', fontSize: 14, fontWeight: '600' },
-
-switchToRegisterText: { color: '#3BB8B8', fontSize: 14, textDecorationLine: 'underline' },
-
-switchToLoginText: { color: '#3BB8B8', fontSize: 14, textDecorationLine: 'underline' },
-
-primaryButton: { backgroundColor: '#3BB8B8', paddingVertical: 14, borderRadius: 14, alignItems: 'center', marginTop: 8 },
-
-buttonText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
-
-// =====================
-// 抽籤按鈕
-// =====================
-luckyDrawButton: { backgroundColor: '#d18de3', paddingVertical: 15, paddingHorizontal: 16, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 16, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
-
-luckyDrawButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
-
-// =====================
-// 首頁 toolbar / action buttons
-// =====================
-toolbarRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 },
-
-smallActionButton: { flex: 1, paddingVertical: 10, paddingHorizontal: 10, borderRadius: 12, alignItems: 'center' },
-
-smallActionButtonText: { color: '#fff', fontSize: 13, fontWeight: 'bold' },
-
-// =====================
-// 分類 / 標籤
-// =====================
-categoryBlock: { borderBottomWidth: 1, borderColor: '#F4E5D8', paddingVertical: 9 },
-
-accordionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-
-categoryLabel: { fontSize: 14, fontWeight: '700', color: '#4A3B32' },
-
-searchHintText: { fontSize: 12, color: '#9B8A7D' },
-
-categoryContent: { marginTop: 6 },
-
-subCategoryBlock: { marginLeft: 10, marginTop: 6 },
-
-subCategoryLabel: { fontSize: 12, color: '#7A6B60', fontWeight: '600', marginBottom: 4 },
-
-dishCardRow: { flexDirection: 'row', alignItems: 'flex-start' },
-
-dishCardContent: { flex: 1 },
-
-dishCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-
-dishName: { fontSize: 16, fontWeight: 'bold', color: '#3F332C', flexShrink: 1 },
-
-dishDetails: { fontSize: 13, color: '#6F6258', marginTop: 6, lineHeight: 19 },
-
-clickHint: { fontSize: 12, color: '#FF7043', marginTop: 8, fontWeight: 'bold' },
-
-dishStatusText: { fontSize: 11, fontWeight: 'bold', marginLeft: 8 },
-
-dishStatusApproved: { color: '#58B368' },
-
-dishStatusPending: { color: '#FAAD14' },
-
-dishStatusPrivate: { color: '#1890FF' },
-
-checkboxBox: { width: 24, height: 24, borderRadius: 6, borderWidth: 2, borderColor: '#B8A89A', backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginRight: 10, marginTop: 2 },
-
-checkboxBoxSelected: { borderColor: '#3BB8B8', backgroundColor: '#3BB8B8' },
-
-checkboxTick: { color: '#fff', fontWeight: 'bold', fontSize: 16, lineHeight: 18 },
-
-// =====================
-// 月曆
-// =====================
-monthSwitcherRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
-
-switchMonthText: { color: '#FF7043', fontWeight: 'bold' },
-
-monthTitle: { fontSize: 16, fontWeight: 'bold', color: '#4A3B32' },
-
-calendarContainer: { backgroundColor: '#FFFFFF', padding: 12, borderRadius: 18, marginBottom: 16, borderWidth: 1, borderColor: '#F4E5D8' },
-
-calendarHeaderRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 6 },
-
-calendarHeaderCell: { fontSize: 14, fontWeight: 'bold', color: '#9B8A7D', width: '14%', textAlign: 'center' },
-
-calendarGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-
-calendarCell: { width: '14.28%', height: 45, justifyContent: 'center', alignItems: 'center', marginVertical: 2, borderRadius: 10 },
-
-calendarCellEmpty: { width: '14.28%', height: 45 },
-
-calendarCellToday: { backgroundColor: '#FFF0E8', borderWidth: 1, borderColor: '#FF8A65' },
-
-calendarCellApproved: { backgroundColor: '#58B368' },
-
-calendarCellCompleted: { backgroundColor: '#A89A8E' },
-
-calendarCellPast: { backgroundColor: '#EFE7DD', opacity: 0.65 },
-
-calendarDayNum: { fontSize: 14, color: '#3F332C' },
-
-calendarDayNumHasEvent: { color: '#fff', fontWeight: 'bold' },
-
-calendarDayNumToday: { color: '#FF7043', fontWeight: 'bold' },
-
-calendarDayNumPast: { color: '#AAA' },
-
-calendarDotWhite: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#fff', marginTop: 2 },
-
-dotMini: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#fff', marginTop: 2 },
-
-// =====================
-// 排餐 request card
-// =====================
-requestCard: { backgroundColor: '#FFFFFF', padding: 15, borderRadius: 18, marginBottom: 12, borderWidth: 1, borderColor: '#F4E5D8' },
-
-requestCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-
-requestMetaText: { marginTop: 6, color: '#4A3B32', fontSize: 13 },
-
-requestMetaTextBottom: { marginTop: 4, marginBottom: 8, color: '#4A3B32', fontSize: 13 },
-
-requestMetaStrong: { fontWeight: 'bold' },
-
-statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, fontSize: 12, overflow: 'hidden', fontWeight: 'bold' },
-
-statusBadgeApproved: { backgroundColor: '#EAF8EE', color: '#58B368' },
-
-statusBadgeRejected: { backgroundColor: '#FFF1F0', color: '#E85D75' },
-
-statusBadgePending: { backgroundColor: '#FFF7E6', color: '#FA8C16' },
-
-timeHighlight: { color: '#FF7043', fontWeight: 'bold' },
-
-actionRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
-
-actionBtn: { flex: 1, padding: 8, borderRadius: 10, alignItems: 'center', marginHorizontal: 3 },
-
-actionBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 13 },
-
-waitingReviewText: { fontSize: 12, color: '#9B8A7D', fontStyle: 'italic', marginTop: 6 },
-
-recommendBox: { backgroundColor: '#FFF1F0', padding: 10, borderRadius: 12, marginBottom: 10, borderWidth: 1, borderColor: '#FFD6D0' },
-
-recommendWarningText: { color: '#E85D75', fontSize: 12, fontWeight: 'bold' },
-
-recommendItemText: { fontSize: 12, color: '#6F6258', marginTop: 2 },
-
-formSectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, marginBottom: 6 },
-
-inlineManageButton: { backgroundColor: '#3BB8B8', paddingVertical: 7, paddingHorizontal: 10, borderRadius: 10 },
-
-inlineManageButtonText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
-
-addCategoryBlock: { marginBottom: 8 },
-
-addSubCategoryBlock: { marginLeft: 10, marginBottom: 5 },
-
-miniCategoryLabel: { fontSize: 11, color: '#9B8A7D', fontWeight: 'bold' },
-
-miniSelectBtn: { backgroundColor: '#FFF7EC', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, marginRight: 6, marginBottom: 6, borderWidth: 1, borderColor: '#F2DDC8' },
-
-miniSelectBtnActive: { backgroundColor: '#FF8A65', borderColor: '#FF8A65' },
-
-miniSelectBtnText: { fontSize: 11, color: '#4A3B32' },
-
-miniSelectBtnTextActive: { color: '#fff', fontWeight: 'bold' },
-
-permissionRow: { flexDirection: 'row', justifyContent: 'space-between' },
-
-permissionRowSpaced: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
-
-permBtn: { flex: 1, padding: 10, borderWidth: 1, borderColor: '#F2DDC8', borderRadius: 12, alignItems: 'center', marginHorizontal: 5, backgroundColor: '#FFF7EC' },
-
-permBtnActive: { borderColor: '#FF8A65', backgroundColor: '#FFF0E8' },
-
-permBtnText: { fontSize: 13, color: '#4A3B32', fontWeight: '600' },
-
-submitDishBtn: { backgroundColor: '#58B368', padding: 15, borderRadius: 14, alignItems: 'center', marginTop: 15 },
-
-submitDishBtnText: { color: '#fff', fontWeight: 'bold' },
-
-// =====================
-// 購物清單
-// =====================
-shoppingInputRow: { flexDirection: 'row', marginBottom: 10 },
-
-shoppingInput: { flex: 1, marginBottom: 0 },
-
-confirmBtnReal: { backgroundColor: '#3BB8B8', justifyContent: 'center', paddingHorizontal: 15, borderRadius: 12, marginLeft: 6 },
-
-confirmBtnRealText: { color: '#fff', fontWeight: 'bold' },
-
-emptyShoppingText: { textAlign: 'center', color: '#9B8A7D', marginVertical: 20 },
-
-shoppingItemRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderColor: '#F4E5D8', alignItems: 'center' },
-
-shoppingItemMain: { flex: 1 },
-
-shoppingItemText: { color: '#3F332C', fontSize: 14 },
-
-shoppingItemTextChecked: { textDecorationLine: 'line-through', color: '#9B8A7D' },
-
-shoppingDeleteButton: { paddingLeft: 10 },
-
-shoppingDeleteText: { color: '#58B368', fontSize: 16 },
-
-// =====================
-// 個人設定 / 成員
-// =====================
-profileText: { fontSize: 15, marginVertical: 6, color: '#3F332C' },
-
-profileHighlightText: { fontWeight: 'bold', color: '#FF7043' },
-
-profileStrongText: { fontWeight: 'bold', color: '#3F332C' },
-
-profileEditButton: { backgroundColor: '#3BB8B8', paddingVertical: 14, borderRadius: 14, alignItems: 'center', marginTop: 8 },
-
-profileEditButtonText: { color: '#fff', fontWeight: 'bold' },
-
-formButtonRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 15 },
-
-groupCodeText: { fontSize: 12, color: '#7A6B60', marginBottom: 10 },
-
-memberRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderColor: '#F4E5D8' },
-
-memberInfoArea: { flex: 1 },
-
-memberActionArea: { alignItems: 'flex-end' },
-
-memberNameText: { fontSize: 15, fontWeight: '700', color: '#3F332C' },
-
-memberRoleText: { fontSize: 12, color: '#7A6B60', marginTop: 2 },
-
-memberRoleCookText: { color: '#58B368', fontWeight: 'bold' },
-
-memberGroupRoleText: { fontSize: 12, color: '#B8A89A', fontStyle: 'italic', marginBottom: 6 },
-
-deleteMemberBtn: { backgroundColor: '#FFF1F0', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: '#FFD6D0', marginBottom: 6 },
-
-deleteMemberBtnText: { color: '#E85D75', fontSize: 12, fontWeight: '600' },
-
-memberAdminToggleOffButton: { backgroundColor: '#F0F0F0', borderColor: '#D9D9D9' },
-
-memberAdminToggleOnButton: { backgroundColor: '#E6FFFB', borderColor: '#87E8DE' },
-
-logoutButton: { width: '100%', paddingVertical: 15, borderRadius: 14, backgroundColor: '#E85D75', alignItems: 'center', marginTop: 12 },
-
-deleteAccountButton: { width: '100%', paddingVertical: 15, borderRadius: 14, backgroundColor: '#A89A8E', alignItems: 'center', marginTop: 12 },
-
-// =====================
-// 角色 / 群組 setup
-// =====================
-roleRow: { flexDirection: 'row', justifyContent: 'space-between' },
-
-roleSelectBtn: { flex: 1, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: '#F2DDC8', alignItems: 'center', marginHorizontal: 5, backgroundColor: '#FFF7EC' },
-
-roleSelectBtnActive: { borderColor: '#FF8A65', backgroundColor: '#FFF0E8' },
-
-roleBtnText: { fontSize: 14, fontWeight: '600', color: '#4A3B32' },
-
-// =====================
-// Modal 基礎
-// =====================
-modalCentered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(63, 51, 44, 0.45)' },
-
-modalView: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 20, width: '86%', maxHeight: '88%', alignItems: 'center', elevation: 5, borderWidth: 1, borderColor: '#F4E5D8' },
-
-modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 15, color: '#3F332C', textAlign: 'center' },
-
-modalContentFull: { width: '100%' },
-
-modalStrongText: { fontWeight: 'bold', color: '#3F332C' },
-
-modalDescriptionText: { fontSize: 13, color: '#6F6258', marginBottom: 10, lineHeight: 20 },
-
-modalDangerHintText: { fontSize: 12, color: '#E85D75', marginTop: 6, lineHeight: 18 },
-
-modalHintText: { fontSize: 12, color: '#9B8A7D', marginTop: 4, lineHeight: 18 },
-
-modalButtonRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 15, width: '100%' },
-
-modalBtn: { flex: 1, padding: 12, borderRadius: 12, alignItems: 'center', marginHorizontal: 5 },
-
-modalBtnText: { color: '#fff', fontWeight: 'bold' },
-
-modalCancelButton: { backgroundColor: '#A89A8E' },
-
-modalPrimaryButton: { backgroundColor: '#FF8A65' },
-
-modalFooterButtonArea: { marginTop: 12, width: '100%' },
-
-emptyModalText: { fontSize: 14, color: '#7A6B60', marginTop: 10, textAlign: 'center' },
-
-// =====================
-// Dropdown / checkbox
-// =====================
-dropdownHeader: { backgroundColor: '#FFF7EC', padding: 11, borderRadius: 12, width: '100%', marginBottom: 6, borderWidth: 1, borderColor: '#F2DDC8' },
-
-dropdownHeaderText: { fontSize: 14, color: '#3F332C' },
-
-dropdownPlaceholderText: { color: '#9B8A7D' },
-
-dropdownList: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#F4E5D8', borderRadius: 12, width: '100%', marginBottom: 10, overflow: 'hidden' },
-
-dropdownItem: { padding: 11, borderBottomWidth: 1, borderColor: '#F4E5D8' },
-
-dropdownItemText: { fontSize: 14, color: '#3F332C' },
-
-checkboxRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 15 },
-
-checkboxRowCompact: { flexDirection: 'row', alignItems: 'center', marginTop: 4, marginBottom: 4 },
-
-checkboxIcon: { fontSize: 16 },
-
-checkboxLabel: { marginLeft: 8, fontSize: 14, color: '#5A4A42', flex: 1 },
-
-hiddenDishesModalView: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 20, width: '86%', maxHeight: '85%', alignItems: 'center', borderWidth: 1, borderColor: '#F4E5D8' },
-
-hiddenDishesScroll: { width: '100%', maxHeight: 420 },
-
-hiddenDishCard: { borderWidth: 1, borderColor: '#D9F7BE', backgroundColor: '#FCFFF5', borderRadius: 14, padding: 12, marginBottom: 10 },
-
-restoreDishButton: { backgroundColor: '#58B368', padding: 9, borderRadius: 12, marginTop: 9, alignItems: 'center' },
-
-restoreDishButtonText: { color: '#fff', fontWeight: 'bold' },
-
-// =====================
-// 收到點菜 / 大廚通知
-// =====================
-requestInboxScroll: { width: '100%', maxHeight: 360 },
-
-requestInboxCard: { borderWidth: 1, borderColor: '#F4E5D8', borderRadius: 14, padding: 12, marginBottom: 10, backgroundColor: '#fff' },
-
-requestInboxActionArea: { marginTop: 10 },
-
-requestInboxActionButton: { padding: 10, borderRadius: 12, marginBottom: 8, alignItems: 'center' },
-
-requestInboxActionText: { color: '#fff', fontWeight: 'bold' },
-
-senderNotificationScroll: { width: '100%', maxHeight: 360 },
-
-senderNotificationCard: { borderWidth: 1, borderColor: '#FFE58F', backgroundColor: '#FFFBE6', borderRadius: 14, padding: 12, marginBottom: 10 },
-
-cookMessageText: { fontSize: 13, color: '#5A4A42', marginTop: 12, lineHeight: 22 },
-
-acknowledgeButton: { backgroundColor: '#58B368', padding: 9, borderRadius: 12, alignItems: 'center', marginTop: 10 },
-
-acknowledgeButtonText: { color: '#fff', fontWeight: 'bold' },
-
-// =====================
-// 改期 meal chips
-// =====================
-mealOptionWrap: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
-
-mealOptionChip: { backgroundColor: '#EFE7DD', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, marginRight: 8, marginBottom: 8 },
-
-mealOptionChipSelected: { backgroundColor: '#3BB8B8' },
-
-mealOptionChipText: { color: '#4A3B32', fontWeight: 'bold' },
-
-mealOptionChipTextSelected: { color: '#fff' },
-
-// =====================
-// Bottom Sheet 管理標籤
-// =====================
-bottomSheetOverlay: { flex: 1, backgroundColor: 'rgba(63, 51, 44, 0.45)', justifyContent: 'flex-end' },
-
-bottomSheetContainer: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, maxHeight: '86%', borderWidth: 1, borderColor: '#F4E5D8' },
-
-bottomSheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, borderBottomWidth: 1, borderColor: '#F4E5D8', paddingBottom: 10 },
-
-bottomSheetTitle: { fontSize: 18, fontWeight: 'bold', color: '#3F332C' },
-
-bottomSheetCloseButton: { padding: 5 },
-
-bottomSheetCloseText: { fontSize: 20, color: '#9B8A7D', fontWeight: 'bold' },
-
-bottomSheetScroll: { width: '100%' },
-
-tagManagerSection: { marginBottom: 20, padding: 12, backgroundColor: '#FFF8F0', borderRadius: 14, borderWidth: 1, borderColor: '#F4E5D8' },
-
-tagManagerSectionTitleBlue: { fontSize: 14, fontWeight: 'bold', color: '#13A8A8', marginBottom: 8 },
-
-tagManagerSectionTitlePink: { fontSize: 14, fontWeight: 'bold', color: '#E85D75', marginBottom: 8 },
-
-modalCategoryPickerArea: { marginTop: 12 },
-
-modalSmallHintText: { fontSize: 12, color: '#6F6258', marginBottom: 8 },
-
-modalCategoryChipWrap: { flexDirection: 'row', flexWrap: 'wrap' },
-
-modalCategoryChip: { paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1, borderColor: '#F2DDC8', borderRadius: 10, marginRight: 8, marginBottom: 8, backgroundColor: '#fff' },
-
-modalCategoryChipSelected: { backgroundColor: '#E85D75', borderColor: '#E85D75' },
-
-modalCategoryChipText: { fontSize: 12, color: '#4A3B32' },
-
-modalCategoryChipTextSelected: { color: '#fff', fontWeight: 'bold' },
-
-moreCategoryToggleButton: { paddingHorizontal: 12, paddingVertical: 7, backgroundColor: '#D99A5C', borderRadius: 18, marginRight: 8, marginBottom: 8, alignItems: 'center', justifyContent: 'center' },
-
-moreCategoryToggleText: { fontSize: 12, color: '#fff', fontWeight: 'bold' },
-
-modalSubCategoryBox: { marginTop: 8, padding: 8, backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#F4E5D8' },
-
-modalSubCategoryHint: { fontSize: 11, color: '#8C7C70', marginBottom: 6 },
-
-modalSubCategoryChip: { paddingHorizontal: 8, paddingVertical: 5, borderWidth: 1, borderColor: '#F2DDC8', borderRadius: 8, marginRight: 6, marginBottom: 6, backgroundColor: '#FFF7EC' },
-
-modalSubCategoryChipSelected: { backgroundColor: '#FA8C16', borderColor: '#FA8C16' },
-
-modalSubCategoryChipText: { fontSize: 11, color: '#6F6258' },
-
-modalSubCategoryChipTextSelected: { color: '#fff', fontWeight: 'bold' },
-
-bottomSheetCancelButton: { flex: 1, backgroundColor: '#A89A8E', padding: 12, borderRadius: 14, alignItems: 'center', marginRight: 10 },
-
-bottomSheetCancelButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
-
-modalCancelButtonText: { color: '#fff', fontWeight: 'bold' },
-
-modalSaveButton: { flex: 2, backgroundColor: '#58B368', padding: 12, borderRadius: 14, alignItems: 'center' },
-
-modalSaveButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
-
-customEditSection: { marginTop: 8, marginBottom: 20, borderTopWidth: 1, borderTopColor: '#F4E5D8', paddingTop: 12 },
-
-customEditToggleButton: { backgroundColor: '#FAAD14', padding: 10, borderRadius: 12, alignItems: 'center', marginBottom: 10 },
-
-customEditToggleButtonActive: { backgroundColor: '#9254DE' },
-
-customEditToggleText: { color: '#fff', fontWeight: 'bold' },
-
-customEditHintText: { fontSize: 13, color: '#6F6258', marginBottom: 8, lineHeight: 20 },
-
-customCategoryTitle: { fontSize: 14, fontWeight: 'bold', color: '#13A8A8', marginTop: 8, marginBottom: 6 },
-
-customTagTitle: { fontSize: 14, fontWeight: 'bold', color: '#E85D75', marginTop: 14, marginBottom: 6 },
-
-customEmptyText: { fontSize: 13, color: '#9B8A7D', fontStyle: 'italic', marginBottom: 8 },
-
-customManageRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#F4E5D8' },
-
-customManageRowMain: { flex: 1, marginRight: 8 },
-
-customManageNameText: { fontSize: 14, fontWeight: 'bold', color: '#3F332C' },
-
-customManageMetaText: { fontSize: 11, color: '#7A6B60', marginTop: 2 },
-
-customManageStateText: { fontSize: 12, color: '#9B8A7D' },
-
-customManageStateTextSelected: { color: '#E85D75', fontWeight: 'bold' },
-
-bulkDeleteButton: { backgroundColor: '#E85D75', padding: 10, borderRadius: 12, alignItems: 'center', marginTop: 14 },
-
-bulkDeleteButtonDisabled: { backgroundColor: '#D8CEC3' },
-
-bulkDeleteButtonText: { color: '#fff', fontWeight: 'bold' },
-
-finishEditButton: { backgroundColor: '#58B368', padding: 10, borderRadius: 12, alignItems: 'center', marginTop: 10 },
-
-finishEditButtonText: { color: '#fff', fontWeight: 'bold' },
-
-// =====================
-// TabBar
-// =====================
-tabBar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', backgroundColor: '#FFFFFF', borderTopWidth: 1, borderTopColor: '#F4E5D8', paddingTop: 6, elevation: 12, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: -2 }, zIndex: 999 },
-
-tabItem: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 4, borderRadius: 12, marginHorizontal: 2 },
-
-tabItemActive: { backgroundColor: '#FFF0E8' },
-
-tabIcon: { fontSize: 20, marginBottom: 2 },
-
-tabText: { fontSize: 11, color: '#7A6B60' },
-
-tabTextActive: { color: '#FF7043', fontWeight: 'bold' },
-
-profileSectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-
-profileInfoBox: { backgroundColor: '#FFF8F0', borderWidth: 1, borderColor: '#F4E5D8', borderRadius: 14, padding: 12, marginBottom: 12 },
-
-profileEditButtonRow: { flexDirection: 'row', marginTop: 14 },
-
-profileCancelButton: { flex: 1, backgroundColor: '#A89A8E', paddingVertical: 12, borderRadius: 14, alignItems: 'center', marginRight: 8 },
-
-profileCancelButtonText: { color: '#fff', fontWeight: 'bold' },
-
-profileSaveButton: { flex: 2, backgroundColor: '#58B368', paddingVertical: 12, borderRadius: 14, alignItems: 'center' },
-
-profileSaveButtonText: { color: '#fff', fontWeight: 'bold' },
-
-groupCodeCopyBox: { backgroundColor: '#FFF7EC', borderWidth: 1, borderColor: '#F2DDC8', borderRadius: 14, padding: 12, marginBottom: 12 },
-
-memberManageToggleButton: { backgroundColor: '#FAAD14', paddingVertical: 7, paddingHorizontal: 12, borderRadius: 12 },
-
-memberManageToggleButtonActive: { backgroundColor: '#58B368' },
-
-memberManageToggleButtonText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
-
-memberCard: { backgroundColor: '#FFF8F0', borderWidth: 1, borderColor: '#F4E5D8', borderRadius: 14, padding: 12, marginBottom: 10 },
-
-memberTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-
-memberButtonRow: { flexDirection: 'row', marginTop: 10 },
-
-memberSmallButton: { flex: 1, paddingVertical: 8, borderRadius: 12, alignItems: 'center', marginRight: 8, borderWidth: 1 },
-
-memberSmallButtonText: { fontSize: 12, fontWeight: 'bold', color: '#3F332C' },
-
-memberRemoveButton: { backgroundColor: '#FFF1F0', borderColor: '#FFD6D0', marginRight: 0 },
-
-memberRemoveButtonText: { fontSize: 12, fontWeight: 'bold', color: '#E85D75' },
-
-scrollTopButton: { position: 'absolute', bottom: 120, right: 20, backgroundColor: '#FF8C42', width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', elevation: 5 },
-
-scrollTopText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
-
-subTabContainer: { flexDirection: 'row', backgroundColor: '#FFF3E8', borderRadius: 999, padding: 4, marginBottom: 14, borderWidth: 1, borderColor: '#F3D2B8' },
-
-subTabButton: { flex: 1, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 999, alignItems: 'center', justifyContent: 'center' },
-
-subTabButtonActive: { backgroundColor: '#FFFFFF', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-
-subTabButtonText: { fontSize: 14, fontWeight: '600', color: '#A66A3F' },
 
 subTabButtonTextActive: { color: '#E86A1C', fontWeight: '800' },
 
@@ -10345,8 +12263,6 @@ bulkTagManageButtonText: { color: '#fff', fontWeight: 'bold' },
 bulkRemoveTagSelected: { backgroundColor: '#E85D75', borderColor: '#E85D75' },
 
 calendarCellSpecialNotice: { backgroundColor: '#7C9A6D', borderColor: '#5F7F52', borderWidth: 1 },
-
-calendarNoticeIconRow: { marginTop: 3, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center' },
 
 calendarNoticeIconText: { fontSize: 10, marginHorizontal: 1 },
 
