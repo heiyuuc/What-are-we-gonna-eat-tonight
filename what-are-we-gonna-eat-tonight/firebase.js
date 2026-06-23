@@ -346,7 +346,38 @@ export const db = {
 
         return result;
       },
+// ✅ 指定 document id 新增 / 覆蓋 document
+set: async (docId, data) => {
+  const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${collectionName}/${docId}`;
 
+  const formattedFields = formatFirestoreFields(data);
+
+  const response = await fetch(url, {
+    method: 'PATCH',
+    headers: await getFirestoreHeaders(true),
+    body: JSON.stringify({
+      fields: formattedFields
+    })
+  });
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    console.log('Firestore set error:', {
+      collectionName,
+      docId,
+      status: response.status,
+      result
+    });
+
+    throw new Error(
+      result.error?.message ||
+      `無法設定資料：${collectionName}/${docId}，HTTP ${response.status}`
+    );
+  }
+
+  return result;
+},
       // ✅ 刪除 document
       delete: async (docId) => {
         const url = `https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/${collectionName}/${docId}`;
