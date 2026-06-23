@@ -6260,6 +6260,29 @@ const renderSubTabButton = (label, isActive, onPress) => {
   );
 };
 //
+const renderTagButtons = (tags, currentSelected, onToggle) => {
+  const safeTags = Array.isArray(tags) ? tags : [];
+  const safeSelected = Array.isArray(currentSelected) ? currentSelected : [];
+
+  return safeTags.map(tag => {
+    const isSelected = safeSelected.includes(tag);
+
+    return (
+      <TouchableOpacity
+        key={tag}
+        style={[styles.tagButtonBig, isSelected && styles.tagButtonSelected]}
+        onPress={() => onToggle(tag)}
+      >
+        <Text style={[styles.tagTextBig, isSelected && { color: '#fff' }]}>
+          {tag}
+        </Text>
+      </TouchableOpacity>
+    );
+  });
+};
+
+
+//
   const addToShoppingList = (ingredientsString) => {
     if (!ingredientsString || ingredientsString === '未填寫') return;
     const items = ingredientsString.split(/、|,|，/).map(item => item.trim()).filter(i => i !== "");
